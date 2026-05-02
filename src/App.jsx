@@ -1297,6 +1297,36 @@ function Dashboard({ requests, workflow, technicians, onJumpToVehicle }) {
     if (a.eta) return -1; if (b.eta) return 1; return 0;
   });
 
+  // ── CSV export of currently visible (filtered + sorted) rows ──
+  const exportCsv = () => {
+    if (sorted.length === 0) return;
+    const rows = sorted.map(e => ({
+      "Stock #": e.stock,
+      "Type": e.type,
+      "VIN": e.vin,
+      "Category / Stage": e.kind === "group" ? `${e.activeStage} (${e.completed}/${e.stageItems.length})` : e.category,
+      "Status": e.status,
+      "Priority": e.priority,
+      "Technician": e.technician || "",
+      "Work Order #": e.workOrder || "",
+      "ETA": e.eta || "",
+      "Overdue": e.anyOverdue ? "YES" : "NO",
+    }));
+    const escape = (v) => {
+      const s = String(v ?? "");
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const headers = Object.keys(rows[0]);
+    const csv = [headers.join(","), ...rows.map(r => headers.map(h => escape(r[h])).join(","))].join("\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `service-tracker-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // ── Aging helper: returns hours since startTime ──
   const ageHours = (start) => start ? (Date.now() - new Date(start).getTime()) / 3600000 : null;
   const isAging = (e) => {
@@ -1412,10 +1442,18 @@ function Dashboard({ requests, workflow, technicians, onJumpToVehicle }) {
 
       {/* Active Requests table */}
       <Card style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ padding: "14px 18px", borderBottom: `1px solid ${H.g100}`, display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ padding: "14px 18px", borderBottom: `1px solid ${H.g100}`, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: H.navy }}>Active Requests</span>
           <span style={{ fontSize: 12, color: H.g400 }}>({sorted.length})</span>
           <span style={{ fontSize: 11, color: H.g400, marginLeft: "auto" }}>Click a row to open it in the Workflow tab</span>
+          <button onClick={exportCsv} disabled={sorted.length === 0} title="Download visible rows as CSV"
+            style={{
+              padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+              cursor: sorted.length === 0 ? "not-allowed" : "pointer",
+              background: H.white, color: H.navy, border: `1px solid ${H.g200}`,
+              display: "inline-flex", alignItems: "center", gap: 4,
+              opacity: sorted.length === 0 ? 0.5 : 1,
+            }}>↓ Export CSV</button>
         </div>
         {sorted.length === 0 ? (
           <div style={{ padding: 30, textAlign: "center", color: H.g400, fontSize: 13 }}>{search ? `No results for "${search}"` : "No active requests"}</div>
@@ -1493,6 +1531,7 @@ function AppInner() {
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusyState] = useState(() => new Set());
   const [focusEntry, setFocusEntry] = useState(null); // key of vehicle/request to scroll to in Workflow tab
+  const [realtimeStatus, setRealtimeStatus] = useState("connecting"); // 'connecting' | 'live' | 'down'
   const toast = useToast();
   const { confirm, dialog: confirmDialog } = useConfirm();
 
@@ -1534,6 +1573,59 @@ function AppInner() {
       finally { setLoading(false); }
     })();
   }, [fetchAll, toast]);
+
+  // Realtime: keep local state in sync with DB changes from any client.
+  // Idempotent merges — re-applying our own optimistic-update echo is a no-op.
+  useEffect(() => {
+    const channel = supabase
+      .channel("service-tracker-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "requests" }, (payload) => {
+        if (payload.eventType === "INSERT") {
+          const r = reqFromRow(payload.new);
+          setRequests((prev) => prev.find((x) => x.id === r.id) ? prev.map((x) => x.id === r.id ? r : x) : [...prev, r]);
+        } else if (payload.eventType === "UPDATE") {
+          const r = reqFromRow(payload.new);
+          setRequests((prev) => prev.map((x) => x.id === r.id ? r : x));
+        } else if (payload.eventType === "DELETE") {
+          const oldId = payload.old.id;
+          setRequests((prev) => prev.filter((x) => x.id !== oldId));
+        }
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "workflow" }, (payload) => {
+        if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
+          const w = wfFromRow(payload.new);
+          const reqId = payload.new.request_id;
+          setWorkflow((prev) => ({ ...prev, [reqId]: w }));
+        } else if (payload.eventType === "DELETE") {
+          // REPLICA IDENTITY FULL gives us request_id in payload.old
+          const reqId = payload.old.request_id;
+          if (reqId) {
+            setWorkflow((prev) => { const next = { ...prev }; delete next[reqId]; return next; });
+          }
+        }
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "technicians" }, (payload) => {
+        if (payload.eventType === "INSERT") {
+          const t = { name: payload.new.name, available: payload.new.available };
+          setTechnicians((prev) => prev.find((x) => x.name === t.name) ? prev.map((x) => x.name === t.name ? t : x) : [...prev, t]);
+        } else if (payload.eventType === "UPDATE") {
+          const t = { name: payload.new.name, available: payload.new.available };
+          setTechnicians((prev) => prev.map((x) => x.name === t.name ? t : x));
+        } else if (payload.eventType === "DELETE") {
+          // REPLICA IDENTITY FULL gives us name in payload.old
+          const oldName = payload.old.name;
+          if (oldName) {
+            setTechnicians((prev) => prev.filter((x) => x.name !== oldName));
+          }
+        }
+      })
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") setRealtimeStatus("live");
+        else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") setRealtimeStatus("down");
+        else setRealtimeStatus("connecting");
+      });
+    return () => { supabase.removeChannel(channel); };
+  }, []);
 
   const refresh = async () => {
     setRefreshing(true);
@@ -1586,7 +1678,21 @@ function AppInner() {
               <Tab active={tab === "tracker"} label="Workflow" icon="⚙️" onClick={() => setTab("tracker")} />
               <Tab active={tab === "techs"} label="Technicians" icon="👨‍🔧" onClick={() => setTab("techs")} />
             </div>
-            <div style={{ display: "flex", gap: 6 }}>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span title={realtimeStatus === "live" ? "Connected — changes from other users appear instantly" : realtimeStatus === "connecting" ? "Connecting to Supabase Realtime…" : "Realtime disconnected — manual refresh needed"}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 4,
+                  padding: "4px 8px", borderRadius: 6, fontSize: 10, fontWeight: 700, letterSpacing: 0.4,
+                  background: "rgba(255,255,255,.08)",
+                  color: realtimeStatus === "live" ? "#7FE3A8" : realtimeStatus === "down" ? "#FFB3B3" : "rgba(255,255,255,.55)",
+                }}>
+                <span style={{
+                  width: 6, height: 6, borderRadius: "50%",
+                  background: realtimeStatus === "live" ? "#3DCC78" : realtimeStatus === "down" ? H.red : H.yellow,
+                  boxShadow: realtimeStatus === "live" ? "0 0 6px #3DCC78" : "none",
+                }} />
+                {realtimeStatus === "live" ? "LIVE" : realtimeStatus === "down" ? "OFFLINE" : "…"}
+              </span>
               <button onClick={refresh} disabled={refreshing} title="Refresh data from Supabase" style={{
                 background: "rgba(255,255,255,.1)", border: "none", color: H.white,
                 padding: "6px 12px", borderRadius: 6, fontSize: 11, cursor: refreshing ? "wait" : "pointer", fontWeight: 600,
