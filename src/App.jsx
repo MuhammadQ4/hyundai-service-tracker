@@ -1305,7 +1305,7 @@ function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technic
             const first = entry.items[0]; const od = entry.anyOverdue;
             const allDone = entry.items.every(x => workflow[x.id]?.status === "Completed");
             const groupSaving = busy.has(`del:${entry.key}`);
-            const hl = highlightKey === entry.key;
+            const hl = false;
             return (
               <Card key={entry.key} id={`entry-${entry.key}`} style={{ padding: 0, borderLeft: `4px solid ${allDone ? H.green : od ? H.red : H.blue}`, position: "relative", outline: hl ? `3px solid ${H.accent}` : "none", transition: "outline 0.3s" }}>
                 <div style={{ padding: "14px 18px 10px", borderBottom: `1px solid ${H.g100}` }}>
@@ -2094,10 +2094,59 @@ function AppInner() {
   );
 }
 
+// ─── Error boundary — keeps a runtime error in any sub-tree from
+// blanking out the entire app. Without this, any uncaught render-time
+// error (a typo, a stale variable reference, a Realtime payload that
+// doesn't match expectations) takes down the whole React tree.
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) {
+    // eslint-disable-next-line no-console
+    console.error("[App ErrorBoundary]", error, info);
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div style={{
+        minHeight: "100vh", padding: "40px 24px",
+        fontFamily: "system-ui, -apple-system, 'Segoe UI', sans-serif",
+        background: H.offWhite, color: H.g800,
+      }}>
+        <div style={{ maxWidth: 720, margin: "0 auto" }}>
+          <div style={{ fontSize: 32, marginBottom: 8 }}>🚧</div>
+          <h1 style={{ color: H.navy, fontSize: 24, margin: "0 0 8px" }}>Something broke.</h1>
+          <p style={{ color: H.g600, marginTop: 0 }}>
+            The app hit an unexpected error. Click below to recover, or use the browser
+            back button. The data in Supabase is untouched.
+          </p>
+          <pre style={{
+            background: H.redBg, color: H.red, padding: 14, borderRadius: 8,
+            whiteSpace: "pre-wrap", overflowX: "auto", fontSize: 12, lineHeight: 1.5,
+            border: `1px solid ${H.red}`,
+          }}>{String(this.state.error?.stack || this.state.error?.message || this.state.error)}</pre>
+          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+            <button onClick={() => this.setState({ error: null })} style={{
+              padding: "9px 18px", background: H.navy, color: H.white, border: "none",
+              borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer",
+            }}>Try again</button>
+            <button onClick={() => { window.location.hash = "#dashboard"; this.setState({ error: null }); }} style={{
+              padding: "9px 18px", background: H.white, color: H.navy, border: `1px solid ${H.g200}`,
+              borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer",
+            }}>Go to Dashboard</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+}
+
 export default function App() {
   return (
-    <ToastProvider>
-      <AppInner />
-    </ToastProvider>
+    <ErrorBoundary>
+      <ToastProvider>
+        <AppInner />
+      </ToastProvider>
+    </ErrorBoundary>
   );
 }
