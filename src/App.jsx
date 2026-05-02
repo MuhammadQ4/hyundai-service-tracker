@@ -82,12 +82,20 @@ const reqToRow = (r) => ({
   created: r.created, eta: r.eta || null,
   workflow_group: r.workflowGroup ?? null,
   workflow_step: r.workflowStep ?? null,
+  customer_name: r.customerName || null,
+  customer_phone: r.customerPhone || null,
+  customer_email: r.customerEmail || null,
+  appointment_at: r.appointmentAt || null,
 });
 const reqFromRow = (row) => ({
   id: row.id, type: row.type, stock: row.stock, vin: row.vin,
   category: row.category, priority: row.priority, notes: row.notes,
   created: row.created, eta: row.eta,
   workflowGroup: row.workflow_group, workflowStep: row.workflow_step,
+  customerName: row.customer_name || "",
+  customerPhone: row.customer_phone || "",
+  customerEmail: row.customer_email || "",
+  appointmentAt: row.appointment_at || null,
 });
 const wfToRow = (id, w) => ({
   request_id: id, work_order: w.workOrder || null, status: w.status,
@@ -200,11 +208,19 @@ function printRepairOrder({ entry, requests, workflow }) {
   <div class="grid">
     <div>
       <div class="label">Name</div>
-      <div class="value">_______________________________________</div>
+      <div class="value">${escape(head.customerName) || "<span style='color:#8B95A5;font-weight:normal;'>_______________________________________</span>"}</div>
     </div>
     <div>
       <div class="label">Phone</div>
-      <div class="value">_______________________________________</div>
+      <div class="value">${escape(head.customerPhone) || "<span style='color:#8B95A5;font-weight:normal;'>_______________________________________</span>"}</div>
+    </div>
+    <div>
+      <div class="label">Email</div>
+      <div class="value">${escape(head.customerEmail) || "<span style='color:#8B95A5;font-weight:normal;'>_______________________________________</span>"}</div>
+    </div>
+    <div>
+      <div class="label">Appointment</div>
+      <div class="value">${escape(head.appointmentAt ? new Date(head.appointmentAt).toLocaleString("en-CA") : "") || "<span style='color:#8B95A5;font-weight:normal;'>_______________________________________</span>"}</div>
     </div>
   </div>
 
@@ -463,6 +479,30 @@ const InlineSelect = ({ label, value, onChange, options, disabled }) => (
     </select>
   </div>
 );
+
+// Compact one-line display of customer info on workflow cards.
+// Renders nothing if no customer fields are populated.
+const CustomerStrip = ({ request: r }) => {
+  if (!r) return null;
+  const has = r.customerName || r.customerPhone || r.customerEmail || r.appointmentAt;
+  if (!has) return null;
+  const apptStr = r.appointmentAt
+    ? new Date(r.appointmentAt).toLocaleString("en-CA", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+    : null;
+  return (
+    <div style={{
+      fontSize: 12, marginBottom: 10, padding: "8px 12px",
+      background: H.offWhite, borderRadius: 6, border: `1px solid ${H.g100}`,
+      display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center",
+    }}>
+      <span style={{ fontSize: 13 }}>👤</span>
+      {r.customerName && <strong style={{ color: H.navy }}>{r.customerName}</strong>}
+      {r.customerPhone && <a href={`tel:${r.customerPhone}`} onClick={(e) => e.stopPropagation()} style={{ color: H.blue, textDecoration: "none", fontWeight: 600 }}>{r.customerPhone}</a>}
+      {r.customerEmail && <a href={`mailto:${r.customerEmail}`} onClick={(e) => e.stopPropagation()} style={{ color: H.blue, textDecoration: "none" }}>{r.customerEmail}</a>}
+      {apptStr && <span style={{ color: H.g600 }}>· Appt <strong style={{ color: H.navy }}>{apptStr}</strong></span>}
+    </div>
+  );
+};
 
 const InlineTextarea = ({ label, value, onSave, placeholder, rows = 2 }) => {
   const [draft, setDraft] = useState(value || "");
@@ -725,7 +765,10 @@ function TechManager({ technicians, setTechnicians, workflow, requests }) {
 // REQUEST ENTRY FORM
 // ════════════════════════════════════════
 function RequestEntryForm({ requests, setRequests, workflow, setWorkflow }) {
-  const [form, setForm] = useState({ type: "", stock: "", vin: "", category: "", priority: "", notes: "", eta: "" });
+  const [form, setForm] = useState({
+    type: "", stock: "", vin: "", category: "", priority: "", notes: "", eta: "",
+    customerName: "", customerPhone: "", customerEmail: "", appointmentAt: "",
+  });
   const [errors, setErrors] = useState({});
   const [vinWarning, setVinWarning] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -788,6 +831,14 @@ function RequestEntryForm({ requests, setRequests, workflow, setWorkflow }) {
     const newRequests = [];
     const newWorkflowEntries = [];
 
+    // Customer fields shared across all stages of a Pre-Owned vehicle.
+    const customerCommon = {
+      customerName: form.customerName.trim() || null,
+      customerPhone: form.customerPhone.trim() || null,
+      customerEmail: form.customerEmail.trim() || null,
+      appointmentAt: form.appointmentAt || null,
+    };
+
     if (form.type === "Pre-Owned") {
       for (let i = 0; i < WORKFLOW_ORDER.length; i++) {
         const id = genId() + "-" + (i + 1);
@@ -797,6 +848,7 @@ function RequestEntryForm({ requests, setRequests, workflow, setWorkflow }) {
           notes: i === 0 ? form.notes : `Auto-created: ${WORKFLOW_ORDER[i]} for ${form.stock.trim()}`,
           created: now(), eta: form.eta || null,
           workflowGroup: cleanVin + "-" + form.stock.trim(), workflowStep: i,
+          ...customerCommon,
         });
         newWorkflowEntries.push({
           id,
@@ -810,6 +862,7 @@ function RequestEntryForm({ requests, setRequests, workflow, setWorkflow }) {
         category: form.category, priority: form.priority,
         notes: form.notes, created: now(), eta: form.eta || null,
         workflowGroup: null, workflowStep: null,
+        ...customerCommon,
       });
       newWorkflowEntries.push({
         id,
@@ -832,7 +885,7 @@ function RequestEntryForm({ requests, setRequests, workflow, setWorkflow }) {
     newWorkflowEntries.forEach(({ id, w }) => { wfMerged[id] = w; });
     setWorkflow(wfMerged);
     const wasPreOwned = form.type === "Pre-Owned";
-    setForm({ type: "", stock: "", vin: "", category: "", priority: "", notes: "", eta: "" });
+    setForm({ type: "", stock: "", vin: "", category: "", priority: "", notes: "", eta: "", customerName: "", customerPhone: "", customerEmail: "", appointmentAt: "" });
     setErrors({}); setVinWarning("");
     setSubmitting(false);
     toast.success(wasPreOwned ? "Pre-Owned workflow created — Reconditioning → Safety → Delivery Prep" : "Request submitted successfully");
@@ -876,6 +929,20 @@ function RequestEntryForm({ requests, setRequests, workflow, setWorkflow }) {
           <textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Describe the issue or work required..." rows={3}
             style={{ width: "100%", padding: "9px 12px", border: `1.5px solid ${H.g200}`, borderRadius: 8, fontSize: 14, color: H.g800, background: H.white, outline: "none", boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }} />
         </div>
+
+        {/* Customer (optional) — vehicle owner contact info, used in printed RO and the notification flow later */}
+        <div style={{ marginBottom: 14, padding: "10px 14px", background: H.offWhite, borderRadius: 8, border: `1px solid ${H.g100}` }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: H.navy, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>
+            Customer <span style={{ color: H.g400, fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>(optional · helps with notifications & RO print)</span>
+          </div>
+          <div className="form-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 16px" }}>
+            <Input label="Customer Name" value={form.customerName} onChange={v => setForm(f => ({ ...f, customerName: v }))} placeholder="Full name" />
+            <Input label="Phone" value={form.customerPhone} onChange={v => setForm(f => ({ ...f, customerPhone: v }))} placeholder="(403) 555-0123" type="tel" />
+            <Input label="Email" value={form.customerEmail} onChange={v => setForm(f => ({ ...f, customerEmail: v }))} placeholder="customer@example.com" type="email" />
+            <Input label="Appointment / Drop-off" value={form.appointmentAt} onChange={v => setForm(f => ({ ...f, appointmentAt: v }))} type="datetime-local" />
+          </div>
+        </div>
+
         <button onClick={submit} disabled={submitting} style={{ width: "100%", padding: "12px", background: H.navy, color: H.white, border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: submitting ? "wait" : "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 10, opacity: submitting ? 0.7 : 1 }}
           onMouseEnter={e => e.target.style.background = H.steel} onMouseLeave={e => e.target.style.background = H.navy}>
           {submitting && <Spinner size={14} />}
@@ -938,7 +1005,41 @@ function RequestEntryForm({ requests, setRequests, workflow, setWorkflow }) {
 // ════════════════════════════════════════
 // WORKFLOW TRACKER
 // ════════════════════════════════════════
-function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technicians, singleEntryKey, onEntryGone, setTab }) {
+// Status history for one request — chronological list of every status change
+// captured by the DB trigger. Defensive about missing data: shows nothing if
+// the history table isn't populated yet.
+const StatusTimeline = ({ events, label = "Status timeline" }) => {
+  if (!events || events.length === 0) return null;
+  // Sort ascending by changedAt for visual flow earliest → latest.
+  const ordered = [...events].sort((a, b) => new Date(a.changedAt) - new Date(b.changedAt));
+  const fmtTime = (iso) => new Date(iso).toLocaleString("en-CA", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const dot = (s) => stColor(s).dot;
+  return (
+    <details style={{ marginTop: 10 }}>
+      <summary style={{ cursor: "pointer", fontSize: 11, fontWeight: 700, color: H.g600, textTransform: "uppercase", letterSpacing: 0.4 }}>
+        {label} <span style={{ color: H.g400, fontWeight: 500 }}>({ordered.length} {ordered.length === 1 ? "event" : "events"})</span>
+      </summary>
+      <ol style={{ listStyle: "none", padding: "8px 0 0 4px", margin: 0, fontSize: 12 }}>
+        {ordered.map((e, i) => (
+          <li key={e.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderLeft: `2px solid ${H.g100}`, paddingLeft: 12, position: "relative" }}>
+            <span style={{ position: "absolute", left: -5, width: 8, height: 8, borderRadius: "50%", background: dot(e.newStatus), border: `1px solid ${H.white}` }} />
+            <span style={{ color: H.g400, minWidth: 110 }}>{fmtTime(e.changedAt)}</span>
+            <span style={{ color: H.g600 }}>
+              {e.oldStatus ? <><span style={{ color: H.g400 }}>{e.oldStatus}</span> → </> : <span style={{ color: H.g400 }}>created → </span>}
+              <strong style={{ color: H.navy }}>{e.newStatus}</strong>
+            </span>
+            {e.actor && <span style={{ color: H.g400, fontSize: 11 }}>by {e.actor}</span>}
+            {i === ordered.length - 1 && (
+              <span style={{ marginLeft: "auto", fontSize: 10, color: H.g400, fontStyle: "italic" }}>most recent</span>
+            )}
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+};
+
+function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technicians, statusHistory = {}, singleEntryKey, onEntryGone, setTab }) {
   const [filter, setFilter] = useState("Active");
   const [search, setSearch] = useState("");
   const toast = useToast();
@@ -1192,6 +1293,9 @@ function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technic
               <InlineTextarea label="Service Notes" value={w.serviceNotes} placeholder="Add service team notes (saves on blur)…"
                 onSave={v => updateField(r.id, "serviceNotes", v)} rows={2} />
             </div>
+            <div style={{ flex: "1 1 100%" }}>
+              <StatusTimeline events={statusHistory[r.id]} label={`${r.category} timeline`} />
+            </div>
           </div>
         )}
       </div>
@@ -1271,6 +1375,7 @@ function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technic
                       {r.eta && <> · Due: <span style={{ color: od ? H.red : H.g600, fontWeight: od ? 700 : 400 }}>{fmtDate(r.eta)}</span></>}
                       {r.eta && w.status !== "Completed" && <> · <span style={{ color: od ? H.red : H.blue, fontWeight: 600 }}>{timeRemaining(r.eta)}</span></>}
                     </div>
+                    <CustomerStrip request={r} />
                     <div style={{ marginBottom: 10 }}>
                       <InlineTextarea label="Issue / Notes" value={r.notes} placeholder="Describe the issue (saves on blur)…"
                         onSave={v => updateRequest(r.id, "notes", v)} rows={2} />
@@ -1298,6 +1403,7 @@ function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technic
                         {w.startTime && w.completionTime && <> · <strong style={{ color: H.navy }}>{timeDiff(w.startTime, w.completionTime)}</strong></>}
                       </div>
                     )}
+                    <StatusTimeline events={statusHistory[r.id]} />
                   </div>
                 </Card>
               );
@@ -1332,6 +1438,7 @@ function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technic
                     {first.eta && <> · Due: <span style={{ color: od ? H.red : H.g600, fontWeight: od ? 700 : 400 }}>{fmtDate(first.eta)}</span></>}
                     {first.eta && !allDone && <> · <span style={{ color: od ? H.red : H.blue, fontWeight: 600 }}>{timeRemaining(first.eta)}</span></>}
                   </div>
+                  <div style={{ marginTop: 8 }}><CustomerStrip request={first} /></div>
                   <div style={{ display: "flex", gap: 10, marginTop: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
                     <InlineSelect label="Priority" value={first.priority} options={PRIORITIES} onChange={v => { entry.items.forEach(r => updateRequest(r.id, "priority", v)); }} />
                     <div>
@@ -1523,18 +1630,31 @@ function Dashboard({ requests, workflow, technicians, onOpenDrawer, setTab }) {
   // ── CSV export of currently visible (filtered + sorted) rows ──
   const exportCsv = () => {
     if (sorted.length === 0) return;
-    const rows = sorted.map(e => ({
-      "Stock #": e.stock,
-      "Type": e.type,
-      "VIN": e.vin,
-      "Category / Stage": e.kind === "group" ? `${e.activeStage} (${e.completed}/${e.stageItems.length})` : e.category,
-      "Status": e.status,
-      "Priority": e.priority,
-      "Technician": e.technician || "",
-      "Work Order #": e.workOrder || "",
-      "ETA": e.eta || "",
-      "Overdue": e.anyOverdue ? "YES" : "NO",
-    }));
+    // Pull customer fields from the first request in each entry (Pre-Owned
+    // groups share customer data across stages so [0] is fine).
+    const customerOf = (e) => {
+      const r = e.kind === "group" ? e.stageItems[0] : (e.item || requests.find(x => x.id === e.key));
+      return r || {};
+    };
+    const rows = sorted.map(e => {
+      const c = customerOf(e);
+      return {
+        "Stock #": e.stock,
+        "Type": e.type,
+        "VIN": e.vin,
+        "Category / Stage": e.kind === "group" ? `${e.activeStage} (${e.completed}/${e.stageItems.length})` : e.category,
+        "Status": e.status,
+        "Priority": e.priority,
+        "Technician": e.technician || "",
+        "Work Order #": e.workOrder || "",
+        "ETA": e.eta || "",
+        "Overdue": e.anyOverdue ? "YES" : "NO",
+        "Customer Name": c.customerName || "",
+        "Customer Phone": c.customerPhone || "",
+        "Customer Email": c.customerEmail || "",
+        "Appointment": c.appointmentAt ? new Date(c.appointmentAt).toLocaleString("en-CA") : "",
+      };
+    });
     const escape = (v) => {
       const s = String(v ?? "");
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -1824,6 +1944,7 @@ function AppInner() {
   const [requests, setRequests] = useState([]);
   const [workflow, setWorkflow] = useState({});
   const [technicians, setTechnicians] = useState([]);
+  const [statusHistory, setStatusHistory] = useState({}); // map<request_id, history_event[]> sorted by changed_at desc
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusyState] = useState(() => new Set());
@@ -1885,10 +2006,12 @@ function AppInner() {
   const loadingApi = useMemo(() => ({ busy, setBusy }), [busy, setBusy]);
 
   const fetchAll = useCallback(async () => {
-    const [reqRes, wfRes, techRes] = await Promise.all([
+    const [reqRes, wfRes, techRes, histRes] = await Promise.all([
       supabase.from("requests").select("*"),
       supabase.from("workflow").select("*"),
       supabase.from("technicians").select("*").order("name"),
+      // History may not exist yet (table created in batch 2); tolerate failure.
+      supabase.from("request_status_history").select("*").order("changed_at", { ascending: false }),
     ]);
     if (reqRes.error) throw reqRes.error;
     if (wfRes.error) throw wfRes.error;
@@ -1899,6 +2022,20 @@ function AppInner() {
     setRequests(reqs);
     setWorkflow(wfMap);
     setTechnicians((techRes.data || []).map((t) => ({ name: t.name, available: t.available })));
+    if (!histRes.error && histRes.data) {
+      const histMap = {};
+      histRes.data.forEach((h) => {
+        if (!histMap[h.request_id]) histMap[h.request_id] = [];
+        histMap[h.request_id].push({
+          id: h.id,
+          oldStatus: h.old_status,
+          newStatus: h.new_status,
+          changedAt: h.changed_at,
+          actor: h.actor,
+        });
+      });
+      setStatusHistory(histMap);
+    }
   }, []);
 
   useEffect(() => {
@@ -1938,6 +2075,18 @@ function AppInner() {
             setWorkflow((prev) => { const next = { ...prev }; delete next[reqId]; return next; });
           }
         }
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "request_status_history" }, (payload) => {
+        const h = payload.new;
+        const ev = {
+          id: h.id, oldStatus: h.old_status, newStatus: h.new_status,
+          changedAt: h.changed_at, actor: h.actor,
+        };
+        setStatusHistory((prev) => {
+          const list = prev[h.request_id] || [];
+          if (list.find((x) => x.id === ev.id)) return prev; // dedupe
+          return { ...prev, [h.request_id]: [ev, ...list] };
+        });
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "technicians" }, (payload) => {
         if (payload.eventType === "INSERT") {
@@ -2030,7 +2179,7 @@ function AppInner() {
           <div className="app-main" style={{ maxWidth: 1100, margin: "0 auto", padding: 24 }}>
             {tab === "dashboard" && <Dashboard requests={requests} workflow={workflow} technicians={technicians} onOpenDrawer={openDrawer} setTab={setTab} />}
             {tab === "entry" && <RequestEntryForm requests={requests} setRequests={setRequests} workflow={workflow} setWorkflow={setWorkflow} />}
-            {tab === "tracker" && <WorkflowTracker requests={requests} setRequests={setRequests} workflow={workflow} setWorkflow={setWorkflow} technicians={technicians} setTab={setTab} />}
+            {tab === "tracker" && <WorkflowTracker requests={requests} setRequests={setRequests} workflow={workflow} setWorkflow={setWorkflow} technicians={technicians} statusHistory={statusHistory} setTab={setTab} />}
             {tab === "techs" && <TechManager technicians={technicians} setTechnicians={setTechnicians} workflow={workflow} requests={requests} />}
           </div>
 
@@ -2080,6 +2229,7 @@ function AppInner() {
                     requests={requests} setRequests={setRequests}
                     workflow={workflow} setWorkflow={setWorkflow}
                     technicians={technicians}
+                    statusHistory={statusHistory}
                     singleEntryKey={drawerKey}
                     onEntryGone={closeDrawer}
                   />
