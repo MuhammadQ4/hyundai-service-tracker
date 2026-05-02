@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="192" y2="192" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#002C5F"/>
+      <stop offset="1" stop-color="#1B3D6D"/>
+    </linearGradient>
+  </defs>
+  <rect width="192" height="192" rx="36" fill="url(#bg)"/>
+  <path d="M132 54a24 24 0 0 0-32.1 25.2L60 119.1a12 12 0 0 0 16.9 16.9L116.8 96a24 24 0 0 0 25.2-32.1L130.3 75.5l-11.7-3-3-11.7L132 54z"
+        fill="#FFFFFF" stroke="#00AAD2" stroke-width="3" stroke-linejoin="round"/>
+  <text x="96" y="172" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF" letter-spacing="1.5">SERVICE</text>
+</svg>

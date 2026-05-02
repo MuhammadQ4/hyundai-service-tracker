@@ -1,6 +1,20 @@
 import React, { useState, useEffect, useMemo, useCallback, useContext, createContext, useRef } from "react";
 import { supabase } from "./supabaseClient";
 
+// ─── Dealership branding (single source of truth) ───
+const DEALERSHIP = {
+  name: "Hyundai Demo Motors",
+  tagline: "Service & Reconditioning Center",
+  address: "123 Auto Mile · Calgary, AB · T2P 1J9",
+  phone: "(403) 555-0100",
+  email: "service@hyundai-demo.ca",
+  website: "https://hyundai-demo.example",
+};
+// Version stamp surfaced in footer and printed RO. Build date is filled in
+// at module-eval time, which on Vercel = the build timestamp.
+const APP_VERSION = "v0.1.0-poc";
+const BUILD_DATE = new Date().toISOString().slice(0, 10);
+
 // ─── Constants ───
 const H = {
   navy: "#002C5F", blue: "#0073CF", lightBlue: "#00AAD2", steel: "#1B3D6D",
@@ -85,6 +99,146 @@ const wfFromRow = (row) => ({
   startTime: row.start_time, completionTime: row.completion_time,
   serviceNotes: row.service_notes || "",
 });
+
+// ─── Printable Repair Order ───
+// Builds a clean, branded HTML document, opens it in a popup, triggers print.
+// Works for both single requests and Pre-Owned groups (multi-stage).
+function printRepairOrder({ entry, requests, workflow }) {
+  const escape = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const isGroup = entry.kind === "group";
+  const items = isGroup ? entry.stageItems : [entry.item ? entry.item : requests.find(r => r.id === entry.id || r.id === entry.key)];
+  const head = items[0];
+  if (!head) return;
+  const wo = isGroup
+    ? (entry.workOrder || items.map(i => workflow[i.id]?.workOrder).find(Boolean) || "—")
+    : (workflow[head.id]?.workOrder || "—");
+
+  const stagesHtml = items.map((r) => {
+    const w = workflow[r.id] || {};
+    return `
+      <tr>
+        <td><strong>${escape(r.category)}</strong></td>
+        <td>${escape(w.status || "Pending")}</td>
+        <td>${escape(w.workOrder || "—")}</td>
+        <td>${escape(w.technician || "—")}</td>
+        <td>${escape(w.startTime ? new Date(w.startTime).toLocaleString("en-CA") : "—")}</td>
+        <td>${escape(w.completionTime ? new Date(w.completionTime).toLocaleString("en-CA") : "—")}</td>
+        <td class="notes">${escape(w.serviceNotes || "")}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><title>Repair Order ${escape(wo)} · ${escape(head.stock)}</title>
+<style>
+  @page { margin: 16mm; }
+  * { box-sizing: border-box; }
+  body { font: 12pt/1.4 -apple-system, "Segoe UI", Roboto, sans-serif; color: #111; margin: 0; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #002C5F; padding-bottom: 12px; margin-bottom: 16px; }
+  .brand { font-size: 18pt; font-weight: 800; color: #002C5F; letter-spacing: 0.5px; }
+  .brand-sub { font-size: 10pt; color: #5A6575; margin-top: 2px; }
+  .right { text-align: right; font-size: 10pt; color: #5A6575; }
+  .right strong { color: #002C5F; font-size: 14pt; display: block; font-family: monospace; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; margin-bottom: 16px; font-size: 11pt; }
+  .grid .label { color: #8B95A5; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.5px; }
+  .grid .value { font-weight: 600; color: #002C5F; margin-bottom: 6px; }
+  .grid .value.mono { font-family: monospace; font-weight: normal; color: #2D3442; }
+  h2 { font-size: 12pt; color: #002C5F; border-bottom: 1px solid #CDD4DE; padding-bottom: 4px; margin: 14px 0 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 10pt; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid #E8ECF1; text-align: left; vertical-align: top; }
+  th { background: #F4F6F9; color: #5A6575; font-size: 9pt; text-transform: uppercase; letter-spacing: 0.4px; }
+  td.notes { color: #5A6575; font-style: italic; max-width: 220px; }
+  .notes-block { background: #F4F6F9; border-left: 3px solid #0073CF; padding: 8px 12px; margin: 10px 0; font-size: 11pt; color: #2D3442; min-height: 30px; }
+  .signatures { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 36px; font-size: 10pt; }
+  .sig-line { border-top: 1px solid #2D3442; padding-top: 4px; color: #5A6575; }
+  footer { margin-top: 24px; padding-top: 8px; border-top: 1px solid #CDD4DE; display: flex; justify-content: space-between; font-size: 8pt; color: #8B95A5; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 10px; background: #E3F2FD; color: #0073CF; font-weight: 600; font-size: 9pt; }
+  @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style></head>
+<body>
+  <div class="header">
+    <div>
+      <div class="brand">${escape(DEALERSHIP.name)}</div>
+      <div class="brand-sub">${escape(DEALERSHIP.tagline)}</div>
+      <div class="brand-sub">${escape(DEALERSHIP.address)} · ${escape(DEALERSHIP.phone)}</div>
+    </div>
+    <div class="right">
+      <div style="font-size:9pt;text-transform:uppercase;letter-spacing:0.5px;">Work Order #</div>
+      <strong>${escape(wo)}</strong>
+      <div style="margin-top:4px;">Generated ${escape(new Date().toLocaleString("en-CA"))}</div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div>
+      <div class="label">Stock #</div>
+      <div class="value">${escape(head.stock)}</div>
+    </div>
+    <div>
+      <div class="label">VIN</div>
+      <div class="value mono">${escape(head.vin)}</div>
+    </div>
+    <div>
+      <div class="label">Request Type</div>
+      <div class="value"><span class="pill">${escape(head.type)}</span></div>
+    </div>
+    <div>
+      <div class="label">Priority</div>
+      <div class="value">${escape(head.priority)}</div>
+    </div>
+    <div>
+      <div class="label">Promised / ETA</div>
+      <div class="value">${escape(head.eta ? new Date(head.eta).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" }) : "—")}</div>
+    </div>
+    <div>
+      <div class="label">Created</div>
+      <div class="value">${escape(head.created ? new Date(head.created).toLocaleString("en-CA") : "—")}</div>
+    </div>
+  </div>
+
+  <h2>Customer</h2>
+  <div class="grid">
+    <div>
+      <div class="label">Name</div>
+      <div class="value">_______________________________________</div>
+    </div>
+    <div>
+      <div class="label">Phone</div>
+      <div class="value">_______________________________________</div>
+    </div>
+  </div>
+
+  <h2>Issue / Notes</h2>
+  <div class="notes-block">${escape(head.notes || "No notes recorded.")}</div>
+
+  <h2>${isGroup ? "Stages (3 of 3)" : "Service Detail"}</h2>
+  <table>
+    <thead><tr>
+      <th>Stage / Category</th><th>Status</th><th>WO #</th><th>Technician</th>
+      <th>Started</th><th>Completed</th><th>Service Notes</th>
+    </tr></thead>
+    <tbody>${stagesHtml}</tbody>
+  </table>
+
+  <div class="signatures">
+    <div class="sig-line">Service Advisor signature & date</div>
+    <div class="sig-line">Customer signature & date</div>
+  </div>
+
+  <footer>
+    <span>${escape(DEALERSHIP.name)} · ${escape(DEALERSHIP.website)}</span>
+    <span>${escape(APP_VERSION)} · build ${escape(BUILD_DATE)}</span>
+  </footer>
+</body></html>`;
+
+  const w = window.open("", "_blank", "width=900,height=1100");
+  if (!w) { alert("Popup blocked — allow popups to print the repair order."); return; }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  // Give layout/CSS a moment, then trigger print.
+  w.onload = () => { setTimeout(() => { w.focus(); w.print(); }, 100); };
+}
 
 // ─── Atomic Work Order generator (Supabase-backed) ───
 async function generateWorkOrder() {
@@ -578,8 +732,10 @@ function RequestEntryForm({ requests, setRequests, workflow, setWorkflow }) {
   const toast = useToast();
 
   const handleVinChange = (v) => {
-    setForm(f => ({ ...f, vin: v }));
-    const clean = v.replace(/\s/g, "").toUpperCase();
+    // Auto-uppercase as the user types — VINs are always uppercase.
+    const upper = v.toUpperCase();
+    setForm(f => ({ ...f, vin: upper }));
+    const clean = upper.replace(/\s/g, "");
     if (clean.length === 0) { setVinWarning(""); return; }
     if (/[IOQ]/.test(clean)) { setVinWarning("VIN cannot contain letters I, O, or Q"); return; }
     if (clean.length < 17) { setVinWarning(`${17 - clean.length} more character${17 - clean.length > 1 ? "s" : ""} needed`); return; }
@@ -589,6 +745,15 @@ function RequestEntryForm({ requests, setRequests, workflow, setWorkflow }) {
       setVinWarning("");
     }
   };
+
+  // Soft warning if ETA is in the past — doesn't block submission.
+  const etaWarning = useMemo(() => {
+    if (!form.eta) return "";
+    const today = new Date(new Date().toDateString());
+    const picked = new Date(form.eta);
+    if (picked < today) return "ETA is in the past — request will appear as overdue immediately";
+    return "";
+  }, [form.eta]);
 
   const validate = () => {
     const e = {};
@@ -699,7 +864,7 @@ function RequestEntryForm({ requests, setRequests, workflow, setWorkflow }) {
           <Input label="VIN" value={form.vin} onChange={handleVinChange} placeholder="e.g. 1HGBH41JXMN109186" maxLength={17} required error={errors.vin}
             hint={vinWarning ? vinWarning : (form.vin.length > 0 && form.vin.replace(/\s/g, "").length === 17 && !errors.vin ? "✓ Valid VIN" : "17 characters, no I/O/Q")} />
           {form.type !== "Pre-Owned" && <Select label="Request Category" value={form.category} onChange={v => setForm(f => ({ ...f, category: v }))} options={CATEGORIES} placeholder="Select category..." required />}
-          <Input label="ETA / Due Date" value={form.eta} onChange={v => setForm(f => ({ ...f, eta: v }))} type="date" />
+          <Input label="ETA / Due Date" value={form.eta} onChange={v => setForm(f => ({ ...f, eta: v }))} type="date" hint={etaWarning} />
         </div>
         {form.type === "Pre-Owned" && (
           <div style={{ padding: "10px 14px", background: H.blueBg, borderRadius: 8, marginBottom: 14, fontSize: 12, color: H.steel, lineHeight: 1.5 }}>
@@ -773,7 +938,7 @@ function RequestEntryForm({ requests, setRequests, workflow, setWorkflow }) {
 // ════════════════════════════════════════
 // WORKFLOW TRACKER
 // ════════════════════════════════════════
-function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technicians, singleEntryKey, onEntryGone }) {
+function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technicians, singleEntryKey, onEntryGone, setTab }) {
   const [filter, setFilter] = useState("Active");
   const [search, setSearch] = useState("");
   const toast = useToast();
@@ -1054,9 +1219,22 @@ function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technic
 
       {visible.length === 0 ? (
         !isDrawer && (
-          <Card style={{ textAlign: "center", padding: 40, color: H.g400 }}>
+          <Card style={{ textAlign: "center", padding: "40px 24px", color: H.g400 }}>
             <div style={{ fontSize: 32, marginBottom: 8 }}>📋</div>
-            <div style={{ fontWeight: 600 }}>No vehicles match{search ? ` "${search}"` : " the filter"}</div>
+            <div style={{ fontWeight: 700, color: H.navy, marginBottom: 4 }}>
+              {search ? `No vehicles match "${search}"` : (requests.length === 0 ? "No requests yet" : `Nothing in ${filter}`)}
+            </div>
+            <div style={{ fontSize: 12, color: H.g400, marginBottom: 14 }}>
+              {requests.length === 0
+                ? "Submit your first service request to get started."
+                : "Try a different filter or clear your search."}
+            </div>
+            {requests.length === 0 && setTab && (
+              <button onClick={() => setTab("entry")} style={{
+                padding: "9px 18px", background: H.navy, color: H.white, border: "none",
+                borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer",
+              }}>+ Create the first request →</button>
+            )}
           </Card>
         )
       ) : (
@@ -1077,10 +1255,16 @@ function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technic
                       <StatusBadge status={w.status} eta={r.eta} />
                       {w.workOrder && <Badge bg={H.g100} color={H.g600} style={{ fontFamily: "monospace", fontSize: 10 }}>{w.workOrder}</Badge>}
                       {saving && <Spinner />}
-                      <button onClick={() => onDeleteSingle(r.id)} title="Delete request"
-                        style={{ marginLeft: "auto", padding: "4px 10px", border: `1px solid ${H.red}`, background: H.redBg, color: H.red, borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
-                        Delete
-                      </button>
+                      <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                        <button onClick={() => printRepairOrder({ entry: { kind: "single", item: r, stageItems: [r] }, requests, workflow })} title="Print Repair Order"
+                          style={{ padding: "4px 10px", border: `1px solid ${H.g200}`, background: H.white, color: H.navy, borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                          🖨 Print
+                        </button>
+                        <button onClick={() => onDeleteSingle(r.id)} title="Delete request"
+                          style={{ padding: "4px 10px", border: `1px solid ${H.red}`, background: H.redBg, color: H.red, borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                          Delete
+                        </button>
+                      </div>
                     </div>
                     <div style={{ fontSize: 12, color: H.g400, marginBottom: 10 }}>
                       VIN: <span style={{ fontFamily: "monospace", color: H.g600 }}>{r.vin}</span>
@@ -1132,10 +1316,16 @@ function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technic
                     {allDone && <Badge bg={H.greenBg} color={H.green}>All Complete</Badge>}
                     {od && !allDone && <Badge bg={H.redBg} color={H.red}>OVERDUE</Badge>}
                     {groupSaving && <Spinner />}
-                    <button onClick={() => onDeleteGroup(entry.key, entry.items[0].id)} title="Delete group or stage"
-                      style={{ marginLeft: "auto", padding: "4px 10px", border: `1px solid ${H.red}`, background: H.redBg, color: H.red, borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
-                      Delete…
-                    </button>
+                    <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                      <button onClick={() => printRepairOrder({ entry: { kind: "group", stageItems: entry.items }, requests, workflow })} title="Print Repair Order (all 3 stages)"
+                        style={{ padding: "4px 10px", border: `1px solid ${H.g200}`, background: H.white, color: H.navy, borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                        🖨 Print
+                      </button>
+                      <button onClick={() => onDeleteGroup(entry.key, entry.items[0].id)} title="Delete group or stage"
+                        style={{ padding: "4px 10px", border: `1px solid ${H.red}`, background: H.redBg, color: H.red, borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                        Delete…
+                      </button>
+                    </div>
                   </div>
                   <div style={{ fontSize: 12, color: H.g400 }}>
                     VIN: <span style={{ fontFamily: "monospace", color: H.g600 }}>{first.vin}</span>
@@ -1184,7 +1374,7 @@ function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technic
 // General Service. Aging badge flags work that's been "In Progress" too long.
 // Pre-Owned funnel + Tech utilization replace the old Priority/Stages cards.
 // Click any row → jumps to that vehicle in the Workflow tab.
-function Dashboard({ requests, workflow, technicians, onOpenDrawer }) {
+function Dashboard({ requests, workflow, technicians, onOpenDrawer, setTab }) {
   const [search, setSearch] = useState("");
   const [dashFilter, setDashFilter] = useState({ status: "All", priority: "All", technician: "All", type: "All" });
 
@@ -1248,6 +1438,38 @@ function Dashboard({ requests, workflow, technicians, onOpenDrawer }) {
     const w = workflow[r.id];
     return w?.status === "Completed" && w.completionTime && new Date(w.completionTime).toDateString() === today;
   }).length;
+
+  // ── Throughput trend: completions per day, last 14 days ──
+  // Counts every workflow row that completed in that day (so a 3-stage
+  // Pre-Owned vehicle that finished today contributes 3, not 1 — manager
+  // wants to see total work shipped).
+  const throughput = useMemo(() => {
+    const days = 14;
+    const buckets = [];
+    const today = new Date(new Date().toDateString());
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - i);
+      const iso = d.toISOString().slice(0, 10);
+      buckets.push({
+        iso,
+        label: d.toLocaleDateString("en-CA", { month: "short", day: "numeric" }),
+        dayLabel: d.toLocaleDateString("en-CA", { day: "numeric" }),
+        weekday: d.toLocaleDateString("en-CA", { weekday: "short" }),
+        count: 0,
+      });
+    }
+    const idx = Object.fromEntries(buckets.map((b, i) => [b.iso, i]));
+    Object.values(workflow).forEach((w) => {
+      if (w.status === "Completed" && w.completionTime) {
+        const iso = new Date(w.completionTime).toISOString().slice(0, 10);
+        if (iso in idx) buckets[idx[iso]].count++;
+      }
+    });
+    const total = buckets.reduce((a, b) => a + b.count, 0);
+    const avg = (total / days).toFixed(1);
+    return { buckets, total, avg };
+  }, [workflow]);
 
   // ── Pre-Owned funnel (active vehicles by current stage) ──
   const funnel = useMemo(() => {
@@ -1377,6 +1599,51 @@ function Dashboard({ requests, workflow, technicians, onOpenDrawer }) {
         <MetricCard label="Overdue" value={overdueCount} color={H.red} />
       </div>
 
+      {/* Throughput trend (last 14 days) */}
+      <Card style={{ marginBottom: 14, padding: "14px 18px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: H.navy }}>Throughput · last 14 days</div>
+            <div style={{ fontSize: 11, color: H.g400 }}>Stages completed per day</div>
+          </div>
+          <div style={{ display: "flex", gap: 14, fontSize: 11 }}>
+            <div><span style={{ color: H.g400 }}>Total: </span><strong style={{ color: H.navy }}>{throughput.total}</strong></div>
+            <div><span style={{ color: H.g400 }}>Avg/day: </span><strong style={{ color: H.navy }}>{throughput.avg}</strong></div>
+          </div>
+        </div>
+        {(() => {
+          const max = Math.max(...throughput.buckets.map(b => b.count), 1);
+          const N = throughput.buckets.length;
+          const W = 700, BARH = 90, GAP = 4;
+          const barW = (W - GAP * (N - 1)) / N;
+          return (
+            <svg viewBox={`0 0 ${W} ${BARH + 28}`} style={{ width: "100%", maxWidth: "100%", height: "auto", display: "block" }} role="img" aria-label="Throughput trend chart">
+              {throughput.buckets.map((b, i) => {
+                const x = i * (barW + GAP);
+                const h = (b.count / max) * BARH;
+                const y = BARH - h;
+                const isWeekend = b.weekday === "Sat" || b.weekday === "Sun";
+                return (
+                  <g key={b.iso}>
+                    {b.count > 0 && (
+                      <rect x={x} y={y} width={barW} height={h} rx={2}
+                        fill={i === N - 1 ? H.blue : H.lightBlue}
+                        opacity={isWeekend ? 0.55 : 1}>
+                        <title>{b.label}: {b.count} completed</title>
+                      </rect>
+                    )}
+                    {b.count === 0 && <rect x={x} y={BARH - 1} width={barW} height={1} fill={H.g200} />}
+                    {b.count > 0 && <text x={x + barW / 2} y={Math.max(y - 3, 9)} textAnchor="middle" fontSize="9" fontWeight="700" fill={H.g600}>{b.count}</text>}
+                    <text x={x + barW / 2} y={BARH + 12} textAnchor="middle" fontSize="9" fill={H.g400}>{b.dayLabel}</text>
+                    <text x={x + barW / 2} y={BARH + 22} textAnchor="middle" fontSize="8" fill={H.g400} opacity={isWeekend ? 1 : 0.5}>{b.weekday}</text>
+                  </g>
+                );
+              })}
+            </svg>
+          );
+        })()}
+      </Card>
+
       {/* Pre-Owned Funnel + Tech Utilization */}
       <div className="dash-charts" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 20 }}>
         <Card>
@@ -1457,7 +1724,28 @@ function Dashboard({ requests, workflow, technicians, onOpenDrawer }) {
             }}>↓ Export CSV</button>
         </div>
         {sorted.length === 0 ? (
-          <div style={{ padding: 30, textAlign: "center", color: H.g400, fontSize: 13 }}>{search ? `No results for "${search}"` : "No active requests"}</div>
+          search ? (
+            <div style={{ padding: 30, textAlign: "center", color: H.g400, fontSize: 13 }}>No results for "{search}"</div>
+          ) : (
+            <div style={{ padding: "40px 24px", textAlign: "center" }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>🚗</div>
+              <div style={{ fontWeight: 700, color: H.navy, marginBottom: 4 }}>No active requests yet</div>
+              <div style={{ fontSize: 12, color: H.g400, marginBottom: 14 }}>
+                {requests.length === 0
+                  ? "Your dealership is all caught up. Submit the first service request to see it here."
+                  : "All requests are completed. Submit a new one when work comes in."}
+              </div>
+              <button onClick={() => setTab && setTab("entry")} style={{
+                padding: "9px 18px", background: H.navy, color: H.white, border: "none",
+                borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer",
+              }}>+ Create your first request →</button>
+              {technicians && technicians.length === 0 && (
+                <div style={{ marginTop: 12, fontSize: 11, color: H.g400 }}>
+                  Tip: add technicians first in the <button onClick={() => setTab && setTab("techs")} style={{ background: "none", border: "none", color: H.blue, cursor: "pointer", padding: 0, font: "inherit", textDecoration: "underline" }}>Technicians tab</button> so you can assign work.
+                </div>
+              )}
+            </div>
+          )
         ) : (
           <div className="dashboard-table-wrap" style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
@@ -1575,6 +1863,18 @@ function AppInner() {
     return () => window.removeEventListener("keydown", onKey);
   }, [drawerKey]);
 
+  // Sync browser tab title with current section.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const TAB_TITLES = {
+      dashboard: "Dashboard",
+      entry: "New Request",
+      tracker: "Workflow",
+      techs: "Technicians",
+    };
+    document.title = `${TAB_TITLES[tab] || "Service Tracker"} · ${DEALERSHIP.name}`;
+  }, [tab]);
+
   const setBusy = useCallback((key, on) => {
     setBusyState((s) => {
       const next = new Set(s);
@@ -1688,13 +1988,17 @@ function AppInner() {
             padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between",
             boxShadow: "0 2px 8px rgba(0,44,95,.15)", position: "sticky", top: 0, zIndex: 100, flexWrap: "wrap", gap: 10,
           }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <button onClick={() => setTab("dashboard")} title="Home — back to Dashboard"
+              style={{
+                display: "flex", alignItems: "center", gap: 14, background: "transparent",
+                border: "none", padding: 0, color: H.white, cursor: "pointer", textAlign: "left",
+              }}>
               <div style={{ width: 36, height: 36, borderRadius: 8, background: "rgba(255,255,255,.12)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🔧</div>
               <div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: H.white, letterSpacing: 0.5 }}>Service Request System</div>
-                <div style={{ fontSize: 11, color: "rgba(255,255,255,.55)", fontWeight: 500 }}>Dealership Operations</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: H.white, letterSpacing: 0.5 }}>{DEALERSHIP.name}</div>
+                <div style={{ fontSize: 11, color: "rgba(255,255,255,.55)", fontWeight: 500 }}>{DEALERSHIP.tagline}</div>
               </div>
-            </div>
+            </button>
             <div className="nav-tabs" style={{ display: "flex", gap: 4, background: "rgba(255,255,255,.08)", borderRadius: 10, padding: 4, flexWrap: "wrap" }}>
               <Tab active={tab === "dashboard"} label="Dashboard" icon="📊" onClick={() => setTab("dashboard")} />
               <Tab active={tab === "entry"} label="Requests" icon="📝" onClick={() => setTab("entry")} />
@@ -1724,11 +2028,28 @@ function AppInner() {
             </div>
           </div>
           <div className="app-main" style={{ maxWidth: 1100, margin: "0 auto", padding: 24 }}>
-            {tab === "dashboard" && <Dashboard requests={requests} workflow={workflow} technicians={technicians} onOpenDrawer={openDrawer} />}
+            {tab === "dashboard" && <Dashboard requests={requests} workflow={workflow} technicians={technicians} onOpenDrawer={openDrawer} setTab={setTab} />}
             {tab === "entry" && <RequestEntryForm requests={requests} setRequests={setRequests} workflow={workflow} setWorkflow={setWorkflow} />}
-            {tab === "tracker" && <WorkflowTracker requests={requests} setRequests={setRequests} workflow={workflow} setWorkflow={setWorkflow} technicians={technicians} />}
+            {tab === "tracker" && <WorkflowTracker requests={requests} setRequests={setRequests} workflow={workflow} setWorkflow={setWorkflow} technicians={technicians} setTab={setTab} />}
             {tab === "techs" && <TechManager technicians={technicians} setTechnicians={setTechnicians} workflow={workflow} requests={requests} />}
           </div>
+
+          {/* Global footer — shown on every tab. Sets brand context + version. */}
+          <footer style={{
+            maxWidth: 1100, margin: "0 auto", padding: "20px 24px 32px",
+            display: "flex", flexWrap: "wrap", gap: 12, justifyContent: "space-between",
+            fontSize: 11, color: H.g400, borderTop: `1px solid ${H.g100}`,
+          }}>
+            <div>
+              <div style={{ fontWeight: 700, color: H.g600 }}>{DEALERSHIP.name}</div>
+              <div>{DEALERSHIP.address}</div>
+              <div>{DEALERSHIP.phone} · {DEALERSHIP.email}</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div><span style={{ background: H.yellowBg, color: "#E68A00", padding: "1px 8px", borderRadius: 4, fontWeight: 700, fontSize: 10, letterSpacing: 0.5 }}>POC</span> Internal demo · not for production use</div>
+              <div style={{ marginTop: 2 }}>{APP_VERSION} · build {BUILD_DATE}</div>
+            </div>
+          </footer>
           {/* Detail drawer (slide-in from right) — replaces the old "click row → switch tab" behavior */}
           {drawerKey && (
             <div onClick={closeDrawer} className="drawer-backdrop"
