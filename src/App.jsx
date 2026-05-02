@@ -773,32 +773,17 @@ function RequestEntryForm({ requests, setRequests, workflow, setWorkflow }) {
 // ════════════════════════════════════════
 // WORKFLOW TRACKER
 // ════════════════════════════════════════
-function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technicians, focusEntry, clearFocus }) {
+function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technicians, singleEntryKey, onEntryGone }) {
   const [filter, setFilter] = useState("Active");
   const [search, setSearch] = useState("");
-  const [highlightKey, setHighlightKey] = useState(null);
   const toast = useToast();
   const { confirm } = useAppConfirm();
   const { busy, setBusy } = useLoading();
-
-  // When Dashboard requests a jump, find the entry, expand the right filter, scroll, briefly highlight.
-  useEffect(() => {
-    if (!focusEntry) return;
-    // Make sure the entry is visible regardless of current filter.
-    setFilter("All");
-    setSearch("");
-    // Wait a tick for the filter change + render before scrolling.
-    const t = setTimeout(() => {
-      const el = document.getElementById(`entry-${focusEntry}`);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-        setHighlightKey(focusEntry);
-        setTimeout(() => setHighlightKey(null), 2000);
-      }
-      clearFocus && clearFocus();
-    }, 80);
-    return () => clearTimeout(t);
-  }, [focusEntry, clearFocus]);
+  // When `singleEntryKey` is set, this component is being rendered inside the
+  // detail drawer — render only that one entry, hide the list chrome (title,
+  // search, filter pills), and tell the parent to close the drawer if the
+  // entry no longer exists (e.g. user just deleted it).
+  const isDrawer = !!singleEntryKey;
 
   const updateRequest = async (id, field, value) => {
     const prev = requests;
@@ -1000,6 +985,16 @@ function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technic
     return c;
   }, [vehicleEntries]);
 
+  // In drawer mode, override sorted to be just the one matching entry.
+  const visible = isDrawer ? vehicleEntries.filter(e => e.key === singleEntryKey) : sorted;
+
+  // Drawer auto-close: if the entry vanishes (user deleted it), notify parent.
+  useEffect(() => {
+    if (isDrawer && onEntryGone && !vehicleEntries.find(e => e.key === singleEntryKey)) {
+      onEntryGone();
+    }
+  }, [isDrawer, singleEntryKey, vehicleEntries, onEntryGone]);
+
   const StepRow = ({ r, isLast, groupKey }) => {
     const w = workflow[r.id]; if (!w) return null;
     const isPending = w.status === "Pending";
@@ -1040,32 +1035,38 @@ function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technic
 
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 20, fontWeight: 700, color: H.navy, margin: 0 }}>Service Workflow Tracker</h2>
-        <p style={{ fontSize: 13, color: H.g400, margin: "4px 0 0" }}>Manage and update service requests — grouped by vehicle</p>
-      </div>
-      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
-        <SearchBar value={search} onChange={setSearch} placeholder="Search by VIN, Stock #, Technician, Work Order..." />
-      </div>
-      <div style={{ display: "flex", gap: 4, background: H.g100, borderRadius: 8, padding: 3, marginBottom: 16, flexWrap: "wrap" }}>
-        {["All", "Active", "In Queue", "In Progress", "On Hold", "Completed"].map(f => (
-          <FilterPill key={f} active={filter === f} label={f} count={counts[f]} onClick={() => setFilter(f)} />
-        ))}
-      </div>
+      {!isDrawer && (
+        <>
+          <div style={{ marginBottom: 16 }}>
+            <h2 style={{ fontSize: 20, fontWeight: 700, color: H.navy, margin: 0 }}>Service Workflow Tracker</h2>
+            <p style={{ fontSize: 13, color: H.g400, margin: "4px 0 0" }}>Manage and update service requests — grouped by vehicle</p>
+          </div>
+          <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+            <SearchBar value={search} onChange={setSearch} placeholder="Search by VIN, Stock #, Technician, Work Order..." />
+          </div>
+          <div style={{ display: "flex", gap: 4, background: H.g100, borderRadius: 8, padding: 3, marginBottom: 16, flexWrap: "wrap" }}>
+            {["All", "Active", "In Queue", "In Progress", "On Hold", "Completed"].map(f => (
+              <FilterPill key={f} active={filter === f} label={f} count={counts[f]} onClick={() => setFilter(f)} />
+            ))}
+          </div>
+        </>
+      )}
 
-      {sorted.length === 0 ? (
-        <Card style={{ textAlign: "center", padding: 40, color: H.g400 }}>
-          <div style={{ fontSize: 32, marginBottom: 8 }}>📋</div>
-          <div style={{ fontWeight: 600 }}>No vehicles match{search ? ` "${search}"` : " the filter"}</div>
-        </Card>
+      {visible.length === 0 ? (
+        !isDrawer && (
+          <Card style={{ textAlign: "center", padding: 40, color: H.g400 }}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>📋</div>
+            <div style={{ fontWeight: 600 }}>No vehicles match{search ? ` "${search}"` : " the filter"}</div>
+          </Card>
+        )
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {sorted.map(entry => {
+          {visible.map(entry => {
             if (entry.kind === "single") {
               const r = entry.item, w = workflow[r.id]; if (!w) return null;
               const od = isOverdue(r.eta, w.status);
               const saving = busy.has(`wf:${r.id}`) || busy.has(`req:${r.id}`) || busy.has(`del:${r.id}`);
-              const hl = highlightKey === entry.key;
+              const hl = false;
               return (
                 <Card key={entry.key} id={`entry-${entry.key}`} style={{ padding: 0, borderLeft: `4px solid ${od ? H.red : stColor(w.status, r.eta).dot}`, position: "relative", outline: hl ? `3px solid ${H.accent}` : "none", transition: "outline 0.3s" }}>
                   <div style={{ padding: "14px 18px" }}>
@@ -1183,7 +1184,7 @@ function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technic
 // General Service. Aging badge flags work that's been "In Progress" too long.
 // Pre-Owned funnel + Tech utilization replace the old Priority/Stages cards.
 // Click any row → jumps to that vehicle in the Workflow tab.
-function Dashboard({ requests, workflow, technicians, onJumpToVehicle }) {
+function Dashboard({ requests, workflow, technicians, onOpenDrawer }) {
   const [search, setSearch] = useState("");
   const [dashFilter, setDashFilter] = useState({ status: "All", priority: "All", technician: "All", type: "All" });
 
@@ -1445,7 +1446,7 @@ function Dashboard({ requests, workflow, technicians, onJumpToVehicle }) {
         <div style={{ padding: "14px 18px", borderBottom: `1px solid ${H.g100}`, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: H.navy }}>Active Requests</span>
           <span style={{ fontSize: 12, color: H.g400 }}>({sorted.length})</span>
-          <span style={{ fontSize: 11, color: H.g400, marginLeft: "auto" }}>Click a row to open it in the Workflow tab</span>
+          <span style={{ fontSize: 11, color: H.g400, marginLeft: "auto" }}>Click a row to view & edit details</span>
           <button onClick={exportCsv} disabled={sorted.length === 0} title="Download visible rows as CSV"
             style={{
               padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600,
@@ -1473,7 +1474,7 @@ function Dashboard({ requests, workflow, technicians, onJumpToVehicle }) {
                   const aging = isAging(e);
                   return (
                     <tr key={e.key}
-                      onClick={() => onJumpToVehicle && onJumpToVehicle(e.jumpKey)}
+                      onClick={() => onOpenDrawer && onOpenDrawer(e.jumpKey)}
                       style={{ background: od ? "#FFF5F5" : "transparent", borderBottom: `1px solid ${H.g100}`, cursor: "pointer" }}
                       onMouseEnter={ev => ev.currentTarget.style.background = od ? "#FFEBEB" : H.offWhite}
                       onMouseLeave={ev => ev.currentTarget.style.background = od ? "#FFF5F5" : "transparent"}
@@ -1522,23 +1523,57 @@ function Dashboard({ requests, workflow, technicians, onJumpToVehicle }) {
 // ════════════════════════════════════════
 // MAIN APP
 // ════════════════════════════════════════
+// ─── Tab routing via URL hash (so browser back/forward works) ───
+const TABS = ["dashboard", "entry", "tracker", "techs"];
+const getTabFromHash = () => {
+  if (typeof window === "undefined") return "dashboard";
+  const h = window.location.hash.replace(/^#/, "");
+  return TABS.includes(h) ? h : "dashboard";
+};
+
 function AppInner() {
-  const [tab, setTab] = useState("dashboard");
+  const [tab, setTabRaw] = useState(getTabFromHash);
   const [requests, setRequests] = useState([]);
   const [workflow, setWorkflow] = useState({});
   const [technicians, setTechnicians] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusyState] = useState(() => new Set());
-  const [focusEntry, setFocusEntry] = useState(null); // key of vehicle/request to scroll to in Workflow tab
+  const [drawerKey, setDrawerKey] = useState(null); // open detail drawer for this entry key
   const [realtimeStatus, setRealtimeStatus] = useState("connecting"); // 'connecting' | 'live' | 'down'
   const toast = useToast();
   const { confirm, dialog: confirmDialog } = useConfirm();
 
-  const jumpToVehicle = useCallback((entryKey) => {
-    setFocusEntry(entryKey);
-    setTab("tracker");
+  const setTab = useCallback((newTab) => {
+    setTabRaw(newTab);
+    if (typeof window !== "undefined" && window.location.hash !== `#${newTab}`) {
+      window.history.pushState({}, "", `#${newTab}`);
+    }
   }, []);
+
+  // Sync tab state when user uses browser back/forward.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPop = () => setTabRaw(getTabFromHash());
+    // Ensure URL hash matches initial tab
+    if (window.location.hash === "" || !TABS.includes(window.location.hash.replace(/^#/, ""))) {
+      window.history.replaceState({}, "", `#${tab}`);
+    }
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const openDrawer = useCallback((entryKey) => setDrawerKey(entryKey), []);
+  const closeDrawer = useCallback(() => setDrawerKey(null), []);
+
+  // Esc to close the drawer.
+  useEffect(() => {
+    if (!drawerKey) return;
+    const onKey = (e) => { if (e.key === "Escape") setDrawerKey(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [drawerKey]);
 
   const setBusy = useCallback((key, on) => {
     setBusyState((s) => {
@@ -1634,21 +1669,9 @@ function AppInner() {
     finally { setRefreshing(false); }
   };
 
-  const resetData = async () => {
-    const ok = await confirm("Clear ALL data (requests, workflow, technicians, work-order counter)? This cannot be undone.", { danger: true, title: "Reset everything", confirmLabel: "Wipe data" });
-    if (!ok) return;
-    setRefreshing(true);
-    const reqDel = await supabase.from("requests").delete().neq("id", "");
-    const techDel = await supabase.from("technicians").delete().neq("name", "");
-    const woDel = await supabase.from("wo_counter").delete().neq("date", "1900-01-01");
-    setRefreshing(false);
-    if (reqDel.error || techDel.error || woDel.error) {
-      toast.error(`Reset failed: ${(reqDel.error || techDel.error || woDel.error).message}`);
-      return;
-    }
-    setRequests([]); setWorkflow({}); setTechnicians([]);
-    toast.success("All data cleared");
-  };
+  // (Reset button intentionally removed — wipe-all-data should not be a UI
+  // action available to anonymous visitors. Run a `truncate` from the Supabase
+  // SQL editor when an admin reset is needed.)
 
   if (loading) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: H.offWhite }}>
@@ -1698,18 +1721,51 @@ function AppInner() {
                 padding: "6px 12px", borderRadius: 6, fontSize: 11, cursor: refreshing ? "wait" : "pointer", fontWeight: 600,
                 display: "inline-flex", alignItems: "center", gap: 6, opacity: refreshing ? 0.7 : 1,
               }}>{refreshing ? <Spinner /> : "↻"} Refresh</button>
-              <button onClick={resetData} title="Reset all data" style={{
-                background: "rgba(255,255,255,.08)", border: "none", color: "rgba(255,255,255,.45)",
-                padding: "6px 12px", borderRadius: 6, fontSize: 11, cursor: "pointer", fontWeight: 600,
-              }}>Reset</button>
             </div>
           </div>
           <div className="app-main" style={{ maxWidth: 1100, margin: "0 auto", padding: 24 }}>
-            {tab === "dashboard" && <Dashboard requests={requests} workflow={workflow} technicians={technicians} onJumpToVehicle={jumpToVehicle} />}
+            {tab === "dashboard" && <Dashboard requests={requests} workflow={workflow} technicians={technicians} onOpenDrawer={openDrawer} />}
             {tab === "entry" && <RequestEntryForm requests={requests} setRequests={setRequests} workflow={workflow} setWorkflow={setWorkflow} />}
-            {tab === "tracker" && <WorkflowTracker requests={requests} setRequests={setRequests} workflow={workflow} setWorkflow={setWorkflow} technicians={technicians} focusEntry={focusEntry} clearFocus={() => setFocusEntry(null)} />}
+            {tab === "tracker" && <WorkflowTracker requests={requests} setRequests={setRequests} workflow={workflow} setWorkflow={setWorkflow} technicians={technicians} />}
             {tab === "techs" && <TechManager technicians={technicians} setTechnicians={setTechnicians} workflow={workflow} requests={requests} />}
           </div>
+          {/* Detail drawer (slide-in from right) — replaces the old "click row → switch tab" behavior */}
+          {drawerKey && (
+            <div onClick={closeDrawer} className="drawer-backdrop"
+              style={{
+                position: "fixed", inset: 0, background: "rgba(0,44,95,.4)", zIndex: 200,
+                display: "flex", justifyContent: "flex-end",
+              }}>
+              <div onClick={(e) => e.stopPropagation()} className="drawer-panel"
+                style={{
+                  background: H.offWhite, width: "min(720px, 95vw)", height: "100%",
+                  overflowY: "auto", boxShadow: "-12px 0 32px rgba(0,44,95,.18)",
+                }}>
+                <div style={{
+                  position: "sticky", top: 0,
+                  background: `linear-gradient(135deg, ${H.navy} 0%, ${H.steel} 100%)`, color: H.white,
+                  padding: "12px 16px", display: "flex", alignItems: "center",
+                  justifyContent: "space-between", zIndex: 1,
+                }}>
+                  <span style={{ fontSize: 13, fontWeight: 700 }}>Vehicle Detail</span>
+                  <button onClick={closeDrawer} title="Close (Esc)"
+                    style={{
+                      background: "rgba(255,255,255,.12)", border: "none", color: H.white,
+                      padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                    }}>✕ Close</button>
+                </div>
+                <div style={{ padding: 16 }}>
+                  <WorkflowTracker
+                    requests={requests} setRequests={setRequests}
+                    workflow={workflow} setWorkflow={setWorkflow}
+                    technicians={technicians}
+                    singleEntryKey={drawerKey}
+                    onEntryGone={closeDrawer}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
           {confirmDialog}
         </div>
       </LoadingCtx.Provider>
