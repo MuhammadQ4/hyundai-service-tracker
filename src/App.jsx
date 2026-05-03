@@ -86,6 +86,8 @@ const reqToRow = (r) => ({
   customer_phone: r.customerPhone || null,
   customer_email: r.customerEmail || null,
   appointment_at: r.appointmentAt || null,
+  created_by: r.createdBy || null,
+  updated_by: r.updatedBy || null,
 });
 const reqFromRow = (row) => ({
   id: row.id, type: row.type, stock: row.stock, vin: row.vin,
@@ -96,16 +98,24 @@ const reqFromRow = (row) => ({
   customerPhone: row.customer_phone || "",
   customerEmail: row.customer_email || "",
   appointmentAt: row.appointment_at || null,
+  createdBy: row.created_by || "",
+  updatedBy: row.updated_by || "",
+  updatedAt: row.updated_at || null,
 });
 const wfToRow = (id, w) => ({
   request_id: id, work_order: w.workOrder || null, status: w.status,
   technician: w.technician || null, start_time: w.startTime,
   completion_time: w.completionTime, service_notes: w.serviceNotes || null,
+  created_by: w.createdBy || null,
+  updated_by: w.updatedBy || null,
 });
 const wfFromRow = (row) => ({
   workOrder: row.work_order || "", status: row.status, technician: row.technician || "",
   startTime: row.start_time, completionTime: row.completion_time,
   serviceNotes: row.service_notes || "",
+  createdBy: row.created_by || "",
+  updatedBy: row.updated_by || "",
+  updatedAt: row.updated_at || null,
 });
 
 // ─── Printable Repair Order ───
@@ -764,7 +774,7 @@ function TechManager({ technicians, setTechnicians, workflow, requests }) {
 // ════════════════════════════════════════
 // REQUEST ENTRY FORM
 // ════════════════════════════════════════
-function RequestEntryForm({ requests, setRequests, workflow, setWorkflow }) {
+function RequestEntryForm({ requests, setRequests, workflow, setWorkflow, actorEmail }) {
   const [form, setForm] = useState({
     type: "", stock: "", vin: "", category: "", priority: "", notes: "", eta: "",
     customerName: "", customerPhone: "", customerEmail: "", appointmentAt: "",
@@ -837,6 +847,8 @@ function RequestEntryForm({ requests, setRequests, workflow, setWorkflow }) {
       customerPhone: form.customerPhone.trim() || null,
       customerEmail: form.customerEmail.trim() || null,
       appointmentAt: form.appointmentAt || null,
+      createdBy: actorEmail || null,
+      updatedBy: actorEmail || null,
     };
 
     if (form.type === "Pre-Owned") {
@@ -852,7 +864,7 @@ function RequestEntryForm({ requests, setRequests, workflow, setWorkflow }) {
         });
         newWorkflowEntries.push({
           id,
-          w: { workOrder: "", status: i === 0 ? "In Queue" : "Pending", technician: "", startTime: null, completionTime: null, serviceNotes: "" },
+          w: { workOrder: "", status: i === 0 ? "In Queue" : "Pending", technician: "", startTime: null, completionTime: null, serviceNotes: "", createdBy: actorEmail || null, updatedBy: actorEmail || null },
         });
       }
     } else {
@@ -866,7 +878,7 @@ function RequestEntryForm({ requests, setRequests, workflow, setWorkflow }) {
       });
       newWorkflowEntries.push({
         id,
-        w: { workOrder: "", status: "In Queue", technician: "", startTime: null, completionTime: null, serviceNotes: "" },
+        w: { workOrder: "", status: "In Queue", technician: "", startTime: null, completionTime: null, serviceNotes: "", createdBy: actorEmail || null, updatedBy: actorEmail || null },
       });
     }
 
@@ -1039,7 +1051,7 @@ const StatusTimeline = ({ events, label = "Status timeline" }) => {
   );
 };
 
-function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technicians, statusHistory = {}, singleEntryKey, onEntryGone, setTab }) {
+function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technicians, statusHistory = {}, singleEntryKey, onEntryGone, setTab, actorEmail }) {
   const [filter, setFilter] = useState("Active");
   const [search, setSearch] = useState("");
   const toast = useToast();
@@ -1056,7 +1068,7 @@ function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technic
     const updated = requests.map(r => r.id === id ? { ...r, [field]: value } : r);
     setRequests(updated);
     setBusy(`req:${id}`, true);
-    const { error } = await supabase.from("requests").update({ [field]: value }).eq("id", id);
+    const { error } = await supabase.from("requests").update({ [field]: value, updated_by: actorEmail || null }).eq("id", id);
     setBusy(`req:${id}`, false);
     if (error) { setRequests(prev); toast.error(`Couldn't save: ${error.message}`); }
   };
@@ -1071,7 +1083,8 @@ function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technic
   };
 
   const persistWorkflow = async (id, w) => {
-    const { error } = await supabase.from("workflow").update(wfToRow(id, w)).eq("request_id", id);
+    const stamped = { ...w, updatedBy: actorEmail || w.updatedBy || null };
+    const { error } = await supabase.from("workflow").update(wfToRow(id, stamped)).eq("request_id", id);
     return error;
   };
 
@@ -1153,7 +1166,7 @@ function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technic
     setBusy(`wf:${id}`, true);
     const colMap = { workOrder: "work_order", technician: "technician", serviceNotes: "service_notes" };
     const col = colMap[field] || field;
-    const { error } = await supabase.from("workflow").update({ [col]: value || null }).eq("request_id", id);
+    const { error } = await supabase.from("workflow").update({ [col]: value || null, updated_by: actorEmail || null }).eq("request_id", id);
     setBusy(`wf:${id}`, false);
     if (error) { setWorkflow(prev); toast.error(`Couldn't save: ${error.message}`); }
   };
@@ -1401,6 +1414,14 @@ function WorkflowTracker({ requests, setRequests, workflow, setWorkflow, technic
                         {w.startTime && <>Started: {fmt(w.startTime)}</>}
                         {w.completionTime && <> · Done: {fmt(w.completionTime)}</>}
                         {w.startTime && w.completionTime && <> · <strong style={{ color: H.navy }}>{timeDiff(w.startTime, w.completionTime)}</strong></>}
+                      </div>
+                    )}
+                    {(r.createdBy || r.updatedBy || w.createdBy || w.updatedBy) && (
+                      <div style={{ fontSize: 11, color: H.g400, marginTop: 4 }}>
+                        Created by <strong style={{ color: H.g600 }}>{r.createdBy || w.createdBy || "anonymous"}</strong>
+                        {(r.updatedBy || w.updatedBy) && (r.updatedBy !== r.createdBy || w.updatedBy !== w.createdBy) && (
+                          <> · last edit by <strong style={{ color: H.g600 }}>{w.updatedBy || r.updatedBy}</strong></>
+                        )}
                       </div>
                     )}
                     <StatusTimeline events={statusHistory[r.id]} />
@@ -1887,7 +1908,18 @@ function Dashboard({ requests, workflow, technicians, onOpenDrawer, setTab }) {
                       onMouseEnter={ev => ev.currentTarget.style.background = od ? "#FFEBEB" : H.offWhite}
                       onMouseLeave={ev => ev.currentTarget.style.background = od ? "#FFF5F5" : "transparent"}
                     >
-                      <td style={{ padding: "10px 12px", fontWeight: 600, color: H.navy, whiteSpace: "nowrap" }}>{e.stock}</td>
+                      <td style={{ padding: "10px 12px", whiteSpace: "nowrap" }}>
+                        <div style={{ fontWeight: 600, color: H.navy }}>{e.stock}</div>
+                        {(() => {
+                          const r = e.kind === "group" ? e.stageItems[0] : (e.item || requests.find(x => x.id === e.key));
+                          return r?.customerName ? (
+                            <div style={{ fontSize: 10, color: H.g400, marginTop: 1, display: "flex", alignItems: "center", gap: 3 }}>
+                              <span>👤</span>
+                              <span>{r.customerName}</span>
+                            </div>
+                          ) : null;
+                        })()}
+                      </td>
                       <td style={{ padding: "10px 12px" }}>
                         <Badge bg={e.type === "Pre-Owned" ? H.blueBg : H.g100} color={e.type === "Pre-Owned" ? H.steel : H.g600}>
                           {e.type}
@@ -1950,8 +1982,13 @@ function AppInner() {
   const [busy, setBusyState] = useState(() => new Set());
   const [drawerKey, setDrawerKey] = useState(null); // open detail drawer for this entry key
   const [realtimeStatus, setRealtimeStatus] = useState("connecting"); // 'connecting' | 'live' | 'down'
+  const [session, setSession] = useState(null); // Supabase auth session, null = anonymous
+  const [signInOpen, setSignInOpen] = useState(false);
+  const [signInEmail, setSignInEmail] = useState("");
+  const [signInSubmitting, setSignInSubmitting] = useState(false);
   const toast = useToast();
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const actorEmail = session?.user?.email || null;
 
   const setTab = useCallback((newTab) => {
     setTabRaw(newTab);
@@ -1983,6 +2020,40 @@ function AppInner() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [drawerKey]);
+
+  // ── Supabase Auth: track session, listen for changes ──
+  useEffect(() => {
+    let mounted = true;
+    supabase.auth.getSession().then(({ data }) => { if (mounted) setSession(data.session ?? null); });
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, sess) => {
+      setSession(sess);
+    });
+    return () => { mounted = false; subscription?.subscription?.unsubscribe?.(); };
+  }, []);
+
+  const sendMagicLink = async () => {
+    const email = signInEmail.trim();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      toast.error("Please enter a valid email");
+      return;
+    }
+    setSignInSubmitting(true);
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: typeof window !== "undefined" ? window.location.origin : undefined },
+    });
+    setSignInSubmitting(false);
+    if (error) { toast.error(`Couldn't send magic link: ${error.message}`); return; }
+    toast.success(`Magic link sent to ${email}. Check your inbox.`);
+    setSignInOpen(false);
+    setSignInEmail("");
+  };
+
+  const signOut = async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) { toast.error(`Sign out failed: ${error.message}`); return; }
+    toast.success("Signed out");
+  };
 
   // Sync browser tab title with current section.
   useEffect(() => {
@@ -2169,6 +2240,25 @@ function AppInner() {
                 }} />
                 {realtimeStatus === "live" ? "LIVE" : realtimeStatus === "down" ? "OFFLINE" : "…"}
               </span>
+              {session ? (
+                <div title={`Signed in as ${actorEmail}`} style={{
+                  display: "inline-flex", alignItems: "center", gap: 6,
+                  padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700,
+                  background: "rgba(255,255,255,.12)", color: H.white, maxWidth: 220,
+                }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#3DCC78" }} />
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{actorEmail}</span>
+                  <button onClick={signOut} title="Sign out"
+                    style={{ background: "transparent", border: "none", color: "rgba(255,255,255,.7)", cursor: "pointer", fontSize: 11, padding: 0, fontWeight: 700 }}>
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <button onClick={() => setSignInOpen(true)} title="Sign in for audit attribution" style={{
+                  background: "rgba(255,255,255,.12)", border: "none", color: H.white,
+                  padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer",
+                }}>Sign in</button>
+              )}
               <button onClick={refresh} disabled={refreshing} title="Refresh data from Supabase" style={{
                 background: "rgba(255,255,255,.1)", border: "none", color: H.white,
                 padding: "6px 12px", borderRadius: 6, fontSize: 11, cursor: refreshing ? "wait" : "pointer", fontWeight: 600,
@@ -2178,8 +2268,8 @@ function AppInner() {
           </div>
           <div className="app-main" style={{ maxWidth: 1100, margin: "0 auto", padding: 24 }}>
             {tab === "dashboard" && <Dashboard requests={requests} workflow={workflow} technicians={technicians} onOpenDrawer={openDrawer} setTab={setTab} />}
-            {tab === "entry" && <RequestEntryForm requests={requests} setRequests={setRequests} workflow={workflow} setWorkflow={setWorkflow} />}
-            {tab === "tracker" && <WorkflowTracker requests={requests} setRequests={setRequests} workflow={workflow} setWorkflow={setWorkflow} technicians={technicians} statusHistory={statusHistory} setTab={setTab} />}
+            {tab === "entry" && <RequestEntryForm requests={requests} setRequests={setRequests} workflow={workflow} setWorkflow={setWorkflow} actorEmail={actorEmail} />}
+            {tab === "tracker" && <WorkflowTracker requests={requests} setRequests={setRequests} workflow={workflow} setWorkflow={setWorkflow} technicians={technicians} statusHistory={statusHistory} setTab={setTab} actorEmail={actorEmail} />}
             {tab === "techs" && <TechManager technicians={technicians} setTechnicians={setTechnicians} workflow={workflow} requests={requests} />}
           </div>
 
@@ -2200,7 +2290,11 @@ function AppInner() {
             </div>
           </footer>
           {/* Detail drawer (slide-in from right) — replaces the old "click row → switch tab" behavior */}
-          {drawerKey && (
+          {drawerKey && (() => {
+            // Derive the headline (stock + customer) from current state so the
+            // drawer header is informative — first thing user sees on click.
+            const drawerReq = requests.find(r => r.id === drawerKey || r.workflowGroup === drawerKey);
+            return (
             <div onClick={closeDrawer} className="drawer-backdrop"
               style={{
                 position: "fixed", inset: 0, background: "rgba(0,44,95,.4)", zIndex: 200,
@@ -2215,13 +2309,22 @@ function AppInner() {
                   position: "sticky", top: 0,
                   background: `linear-gradient(135deg, ${H.navy} 0%, ${H.steel} 100%)`, color: H.white,
                   padding: "12px 16px", display: "flex", alignItems: "center",
-                  justifyContent: "space-between", zIndex: 1,
+                  justifyContent: "space-between", zIndex: 1, gap: 10,
                 }}>
-                  <span style={{ fontSize: 13, fontWeight: 700 }}>Vehicle Detail</span>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700 }}>Vehicle Detail</div>
+                    {drawerReq && (
+                      <div style={{ fontSize: 11, color: "rgba(255,255,255,.72)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        Stock <strong style={{ color: H.white }}>{drawerReq.stock}</strong>
+                        {drawerReq.customerName && <> · 👤 <strong style={{ color: H.white }}>{drawerReq.customerName}</strong></>}
+                        {drawerReq.customerPhone && <> · {drawerReq.customerPhone}</>}
+                      </div>
+                    )}
+                  </div>
                   <button onClick={closeDrawer} title="Close (Esc)"
                     style={{
                       background: "rgba(255,255,255,.12)", border: "none", color: H.white,
-                      padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                      padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", flexShrink: 0,
                     }}>✕ Close</button>
                 </div>
                 <div style={{ padding: 16 }}>
@@ -2232,12 +2335,49 @@ function AppInner() {
                     statusHistory={statusHistory}
                     singleEntryKey={drawerKey}
                     onEntryGone={closeDrawer}
+                    actorEmail={actorEmail}
                   />
                 </div>
               </div>
             </div>
-          )}
+            );
+          })()}
           {confirmDialog}
+
+          {signInOpen && (
+            <div onClick={() => setSignInOpen(false)} style={{
+              position: "fixed", inset: 0, background: "rgba(0,44,95,.4)", zIndex: 9998,
+              display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+            }}>
+              <div onClick={(e) => e.stopPropagation()} style={{
+                background: H.white, borderRadius: 12, maxWidth: 420, width: "100%",
+                boxShadow: "0 12px 40px rgba(0,44,95,.25)", overflow: "hidden",
+              }}>
+                <div style={{ background: H.navy, color: H.white, padding: "14px 18px", fontSize: 14, fontWeight: 700 }}>
+                  Sign in
+                </div>
+                <div style={{ padding: 18 }}>
+                  <p style={{ fontSize: 13, color: H.g600, margin: "0 0 14px", lineHeight: 1.5 }}>
+                    Enter your email to receive a magic-link sign-in.
+                    Once signed in, your name appears on every change you make
+                    (audit trail). No password needed.
+                  </p>
+                  <Input label="Email" value={signInEmail} onChange={setSignInEmail} placeholder="you@example.com" type="email" required />
+                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 10 }}>
+                    <button onClick={() => setSignInOpen(false)} style={{
+                      padding: "8px 16px", borderRadius: 8, border: `1px solid ${H.g200}`, background: H.white,
+                      color: H.g800, fontSize: 13, fontWeight: 600, cursor: "pointer",
+                    }}>Cancel</button>
+                    <button onClick={sendMagicLink} disabled={signInSubmitting} style={{
+                      padding: "8px 16px", borderRadius: 8, border: "none", background: H.navy, color: H.white,
+                      fontSize: 13, fontWeight: 700, cursor: signInSubmitting ? "wait" : "pointer",
+                      display: "inline-flex", alignItems: "center", gap: 8, opacity: signInSubmitting ? 0.7 : 1,
+                    }}>{signInSubmitting && <Spinner />}Send magic link</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </LoadingCtx.Provider>
     </ConfirmCtx.Provider>
