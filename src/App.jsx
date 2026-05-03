@@ -2438,7 +2438,15 @@ function AppInner() {
               }}>{refreshing ? <Spinner /> : "↻"} Refresh</button>
             </div>
           </div>
-          <div className="app-main" style={{ maxWidth: 1100, margin: "0 auto", padding: 24 }}>
+          <div className="app-main" style={{
+            // Per-tab horizontal sizing — Dashboard goes full-width so the
+            // active-requests table and chart breathe; the entry form stays
+            // narrow because forms read better at ~720px; workflow + techs
+            // get medium widths.
+            maxWidth: ({ dashboard: "100%", tracker: 1440, entry: 720, techs: 1100 })[tab] || 1100,
+            margin: "0 auto",
+            padding: tab === "dashboard" ? "24px 32px" : 24,
+          }}>
             {tab === "dashboard" && <Dashboard requests={requests} workflow={workflow} technicians={technicians} onOpenDrawer={openDrawer} setTab={setTab} />}
             {tab === "entry" && <RequestEntryForm requests={requests} setRequests={setRequests} workflow={workflow} setWorkflow={setWorkflow} actorEmail={actorEmail} />}
             {tab === "tracker" && <WorkflowTracker requests={requests} setRequests={setRequests} workflow={workflow} setWorkflow={setWorkflow} technicians={technicians} statusHistory={statusHistory} setTab={setTab} actorEmail={actorEmail} />}
