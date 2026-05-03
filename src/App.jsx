@@ -2072,6 +2072,23 @@ function AppInner() {
     setSignInEmail(""); setSignInPassword("");
   };
 
+  // OAuth (Google). Browser redirects to Google's account picker, then back
+  // through Supabase's /auth/v1/callback, which sets the session and returns
+  // the user to redirectTo. No email send → no rate limit.
+  const signInWithGoogle = async () => {
+    setSignInSubmitting(true);
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: typeof window !== "undefined" ? window.location.origin : undefined },
+    });
+    // Note: on success, the page navigates away — the spinner state below
+    // is moot. Only resets visibly on failure.
+    if (error) {
+      setSignInSubmitting(false);
+      toast.error(`Google sign in failed: ${error.message}`);
+    }
+  };
+
   const signOut = async () => {
     const { error } = await supabase.auth.signOut();
     if (error) { toast.error(`Sign out failed: ${error.message}`); return; }
@@ -2270,6 +2287,32 @@ function AppInner() {
           </div>
         ) : (
           <>
+            {/* Google sign-in (primary) */}
+            <button onClick={signInWithGoogle} disabled={signInSubmitting} style={{
+              width: "100%", padding: "11px", background: H.white, color: H.g800,
+              border: `1.5px solid ${H.g200}`, borderRadius: 8, fontSize: 14, fontWeight: 600,
+              cursor: signInSubmitting ? "wait" : "pointer", marginBottom: 16,
+              display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 10,
+              transition: "border-color .15s, background .15s",
+            }}
+              onMouseEnter={(e) => { if (!signInSubmitting) { e.currentTarget.style.borderColor = H.g400; e.currentTarget.style.background = H.offWhite; } }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = H.g200; e.currentTarget.style.background = H.white; }}>
+              <svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true">
+                <path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"/>
+                <path fill="#FF3D00" d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 16.318 4 9.656 8.337 6.306 14.691z"/>
+                <path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238A11.91 11.91 0 0 1 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z"/>
+                <path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303a12.04 12.04 0 0 1-4.087 5.571l.003-.002 6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z"/>
+              </svg>
+              Continue with Google
+            </button>
+
+            {/* "or" divider */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+              <div style={{ flex: 1, height: 1, background: H.g100 }} />
+              <span style={{ fontSize: 11, color: H.g400, fontWeight: 600, letterSpacing: 0.5 }}>OR</span>
+              <div style={{ flex: 1, height: 1, background: H.g100 }} />
+            </div>
+
             {/* Mode tabs */}
             <div style={{ display: "flex", gap: 4, background: H.g100, borderRadius: 8, padding: 3, marginBottom: 14 }}>
               <button onClick={() => setSignInMode("magic")} style={{
