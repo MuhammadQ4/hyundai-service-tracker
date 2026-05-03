@@ -1984,7 +1984,9 @@ function AppInner() {
   const [realtimeStatus, setRealtimeStatus] = useState("connecting"); // 'connecting' | 'live' | 'down'
   const [session, setSession] = useState(null); // Supabase auth session, null = anonymous
   const [sessionChecked, setSessionChecked] = useState(false); // true once initial getSession resolves
+  const [signInMode, setSignInMode] = useState("magic"); // 'magic' | 'password'
   const [signInEmail, setSignInEmail] = useState("");
+  const [signInPassword, setSignInPassword] = useState("");
   const [signInSubmitting, setSignInSubmitting] = useState(false);
   const [signInSentTo, setSignInSentTo] = useState(""); // email a link was just sent to (for the success card)
   const toast = useToast();
@@ -2053,6 +2055,21 @@ function AppInner() {
     if (error) { toast.error(`Couldn't send magic link: ${error.message}`); return; }
     setSignInSentTo(email);
     setSignInEmail("");
+  };
+
+  const signInWithPassword = async () => {
+    const email = signInEmail.trim();
+    const password = signInPassword;
+    if (!email || !password) {
+      toast.error("Email and password required");
+      return;
+    }
+    setSignInSubmitting(true);
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    setSignInSubmitting(false);
+    if (error) { toast.error(`Sign in failed: ${error.message}`); return; }
+    // session updates via onAuthStateChange listener
+    setSignInEmail(""); setSignInPassword("");
   };
 
   const signOut = async () => {
@@ -2253,20 +2270,45 @@ function AppInner() {
           </div>
         ) : (
           <>
+            {/* Mode tabs */}
+            <div style={{ display: "flex", gap: 4, background: H.g100, borderRadius: 8, padding: 3, marginBottom: 14 }}>
+              <button onClick={() => setSignInMode("magic")} style={{
+                flex: 1, padding: "6px 10px", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                background: signInMode === "magic" ? H.white : "transparent",
+                color: signInMode === "magic" ? H.navy : H.g400,
+                boxShadow: signInMode === "magic" ? "0 1px 3px rgba(0,0,0,.1)" : "none",
+              }}>📧 Magic link</button>
+              <button onClick={() => setSignInMode("password")} style={{
+                flex: 1, padding: "6px 10px", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                background: signInMode === "password" ? H.white : "transparent",
+                color: signInMode === "password" ? H.navy : H.g400,
+                boxShadow: signInMode === "password" ? "0 1px 3px rgba(0,0,0,.1)" : "none",
+              }}>🔑 Password</button>
+            </div>
+
             <Input label="Email" value={signInEmail} onChange={setSignInEmail} placeholder="you@example.com" type="email" required />
-            <button onClick={sendMagicLink} disabled={signInSubmitting} style={{
+
+            {signInMode === "password" && (
+              <Input label="Password" value={signInPassword} onChange={setSignInPassword} placeholder="••••••••" type="password" required />
+            )}
+
+            <button onClick={signInMode === "magic" ? sendMagicLink : signInWithPassword} disabled={signInSubmitting} style={{
               width: "100%", padding: "12px", background: H.navy, color: H.white, border: "none",
               borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: signInSubmitting ? "wait" : "pointer",
               display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 10,
               opacity: signInSubmitting ? 0.7 : 1, marginTop: 4,
             }}
-              onKeyDown={e => e.key === "Enter" && sendMagicLink()}>
+              onKeyDown={e => e.key === "Enter" && (signInMode === "magic" ? sendMagicLink() : signInWithPassword())}>
               {signInSubmitting && <Spinner size={14} />}
-              Continue with email →
+              {signInMode === "magic" ? "Continue with email →" : "Sign in →"}
             </button>
+
             <p style={{ fontSize: 11, color: H.g400, marginTop: 12, marginBottom: 0, lineHeight: 1.5 }}>
-              <strong>First time?</strong> Just enter your email — your account is created on first sign-in.
-              No separate sign-up step.
+              {signInMode === "magic" ? (
+                <><strong>First time?</strong> Just enter your email — your account is created on first sign-in. No separate sign-up step.</>
+              ) : (
+                <>Password accounts can be created in the Supabase Dashboard (Auth → Users → Add user). Useful when the magic-link email service is rate-limited.</>
+              )}
             </p>
           </>
         )}
