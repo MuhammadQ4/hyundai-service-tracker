@@ -2004,8 +2004,13 @@ function AppInner() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const onPop = () => setTabRaw(getTabFromHash());
-    // Ensure URL hash matches initial tab
-    if (window.location.hash === "" || !TABS.includes(window.location.hash.replace(/^#/, ""))) {
+    // Ensure URL hash matches initial tab — BUT NOT if the hash carries an
+    // OAuth callback (Supabase needs to read #access_token=… / #error=…
+    // before it cleans up the URL). Overwriting the hash here would silently
+    // destroy the token and bounce the user back to the LoginScreen.
+    const h = window.location.hash;
+    const isAuthCallback = h.includes("access_token=") || h.includes("error=") || h.includes("error_code=") || h.includes("provider_token=");
+    if (!isAuthCallback && (h === "" || !TABS.includes(h.replace(/^#/, "")))) {
       window.history.replaceState({}, "", `#${tab}`);
     }
     window.addEventListener("popstate", onPop);
