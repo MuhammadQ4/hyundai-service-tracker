@@ -1983,9 +1983,10 @@ function AppInner() {
   const [drawerKey, setDrawerKey] = useState(null); // open detail drawer for this entry key
   const [realtimeStatus, setRealtimeStatus] = useState("connecting"); // 'connecting' | 'live' | 'down'
   const [session, setSession] = useState(null); // Supabase auth session, null = anonymous
-  const [signInOpen, setSignInOpen] = useState(false);
+  const [sessionChecked, setSessionChecked] = useState(false); // true once initial getSession resolves
   const [signInEmail, setSignInEmail] = useState("");
   const [signInSubmitting, setSignInSubmitting] = useState(false);
+  const [signInSentTo, setSignInSentTo] = useState(""); // email a link was just sent to (for the success card)
   const toast = useToast();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const actorEmail = session?.user?.email || null;
@@ -2022,11 +2023,17 @@ function AppInner() {
   }, [drawerKey]);
 
   // ── Supabase Auth: track session, listen for changes ──
+  // sessionChecked flips true once the initial getSession() round-trip completes,
+  // which lets us avoid a flash of "login screen" before we know if a session exists.
   useEffect(() => {
     let mounted = true;
-    supabase.auth.getSession().then(({ data }) => { if (mounted) setSession(data.session ?? null); });
+    supabase.auth.getSession().then(({ data }) => {
+      if (mounted) { setSession(data.session ?? null); setSessionChecked(true); }
+    });
     const { data: subscription } = supabase.auth.onAuthStateChange((_event, sess) => {
       setSession(sess);
+      // Clear any "magic link sent to..." banner once a session arrives
+      if (sess) setSignInSentTo("");
     });
     return () => { mounted = false; subscription?.subscription?.unsubscribe?.(); };
   }, []);
@@ -2044,8 +2051,7 @@ function AppInner() {
     });
     setSignInSubmitting(false);
     if (error) { toast.error(`Couldn't send magic link: ${error.message}`); return; }
-    toast.success(`Magic link sent to ${email}. Check your inbox.`);
-    setSignInOpen(false);
+    setSignInSentTo(email);
     setSignInEmail("");
   };
 
@@ -2109,17 +2115,28 @@ function AppInner() {
     }
   }, []);
 
+  // Only fetch data once the user is authenticated. When they sign out, clear it.
   useEffect(() => {
+    if (!sessionChecked) return;
+    if (!session) {
+      setLoading(false);
+      setRequests([]); setWorkflow({}); setTechnicians([]); setStatusHistory({});
+      return;
+    }
+    setLoading(true);
     (async () => {
       try { await fetchAll(); }
       catch (e) { toast.error(`Couldn't load data: ${e.message || e}`); }
       finally { setLoading(false); }
     })();
-  }, [fetchAll, toast]);
+  }, [session, sessionChecked, fetchAll, toast]);
 
   // Realtime: keep local state in sync with DB changes from any client.
-  // Idempotent merges — re-applying our own optimistic-update echo is a no-op.
+  // Only connect once we have a session (so the channel carries the JWT and
+  // RLS-gated events get delivered). When session changes, the previous
+  // channel is torn down and a fresh one opens.
   useEffect(() => {
+    if (!session) { setRealtimeStatus("connecting"); return; }
     const channel = supabase
       .channel("service-tracker-live")
       .on("postgres_changes", { event: "*", schema: "public", table: "requests" }, (payload) => {
@@ -2180,7 +2197,7 @@ function AppInner() {
         else setRealtimeStatus("connecting");
       });
     return () => { supabase.removeChannel(channel); };
-  }, []);
+  }, [session]);
 
   const refresh = async () => {
     setRefreshing(true);
@@ -2193,9 +2210,78 @@ function AppInner() {
   // action available to anonymous visitors. Run a `truncate` from the Supabase
   // SQL editor when an admin reset is needed.)
 
+  // ── Auth gate ──
+  // 1) Initial paint while session is unknown — splash, no leak of UI.
+  if (!sessionChecked) return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: H.offWhite }}>
+      <div style={{ textAlign: "center" }}><div style={{ fontSize: 32, marginBottom: 12 }}>🚗</div><div style={{ fontWeight: 700, color: H.navy }}>Loading…</div></div>
+    </div>
+  );
+  // 2) Not signed in — full-page LoginScreen, app is invisible.
+  if (!session) return (
+    <div style={{
+      minHeight: "100vh", background: `linear-gradient(135deg, ${H.navy} 0%, ${H.steel} 100%)`,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+      fontFamily: "'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif",
+    }}>
+      <div style={{
+        background: H.white, borderRadius: 14, padding: "36px 32px 28px",
+        maxWidth: 440, width: "100%", boxShadow: "0 16px 48px rgba(0,0,0,.25)",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+          <div style={{ width: 44, height: 44, borderRadius: 10, background: `linear-gradient(135deg, ${H.navy} 0%, ${H.steel} 100%)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>🔧</div>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: H.navy }}>{DEALERSHIP.name}</div>
+            <div style={{ fontSize: 11, color: H.g400 }}>{DEALERSHIP.tagline}</div>
+          </div>
+        </div>
+
+        <h1 style={{ fontSize: 22, fontWeight: 700, color: H.navy, margin: "0 0 6px" }}>Sign in to continue</h1>
+        <p style={{ fontSize: 13, color: H.g600, margin: "0 0 20px", lineHeight: 1.5 }}>
+          Enter your email — we'll send a one-tap magic link, no password needed.
+          Your email becomes your audit identity for everything you change in the app.
+        </p>
+
+        {signInSentTo ? (
+          <div style={{ background: H.greenBg, border: `1px solid ${H.green}`, color: H.green, padding: "12px 14px", borderRadius: 8, fontSize: 13, marginBottom: 14 }}>
+            <strong>✓ Magic link sent</strong> to <strong>{signInSentTo}</strong>.
+            Open the email and click the link — this tab will sign you in automatically.
+            <button onClick={() => setSignInSentTo("")} style={{
+              display: "block", marginTop: 10, background: "transparent", border: "none",
+              color: H.green, cursor: "pointer", fontSize: 12, fontWeight: 700, padding: 0, textDecoration: "underline",
+            }}>← Use a different email</button>
+          </div>
+        ) : (
+          <>
+            <Input label="Email" value={signInEmail} onChange={setSignInEmail} placeholder="you@example.com" type="email" required />
+            <button onClick={sendMagicLink} disabled={signInSubmitting} style={{
+              width: "100%", padding: "12px", background: H.navy, color: H.white, border: "none",
+              borderRadius: 8, fontSize: 14, fontWeight: 700, cursor: signInSubmitting ? "wait" : "pointer",
+              display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 10,
+              opacity: signInSubmitting ? 0.7 : 1, marginTop: 4,
+            }}
+              onKeyDown={e => e.key === "Enter" && sendMagicLink()}>
+              {signInSubmitting && <Spinner size={14} />}
+              Continue with email →
+            </button>
+            <p style={{ fontSize: 11, color: H.g400, marginTop: 12, marginBottom: 0, lineHeight: 1.5 }}>
+              <strong>First time?</strong> Just enter your email — your account is created on first sign-in.
+              No separate sign-up step.
+            </p>
+          </>
+        )}
+
+        <div style={{ marginTop: 22, paddingTop: 16, borderTop: `1px solid ${H.g100}`, fontSize: 10, color: H.g400, display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+          <span><span style={{ background: H.yellowBg, color: "#E68A00", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>POC</span> Internal demo · not for production use</span>
+          <span>{APP_VERSION} · build {BUILD_DATE}</span>
+        </div>
+      </div>
+    </div>
+  );
+  // 3) Signed in but data still loading.
   if (loading) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", background: H.offWhite }}>
-      <div style={{ textAlign: "center" }}><div style={{ fontSize: 32, marginBottom: 12 }}>🚗</div><div style={{ fontWeight: 700, color: H.navy }}>Loading Service Tracker...</div></div>
+      <div style={{ textAlign: "center" }}><div style={{ fontSize: 32, marginBottom: 12 }}>🚗</div><div style={{ fontWeight: 700, color: H.navy }}>Loading Service Tracker…</div></div>
     </div>
   );
 
@@ -2240,7 +2326,8 @@ function AppInner() {
                 }} />
                 {realtimeStatus === "live" ? "LIVE" : realtimeStatus === "down" ? "OFFLINE" : "…"}
               </span>
-              {session ? (
+              {/* Once gate is on, header only shows the signed-in pill — no anonymous state reaches this point */}
+              {session && (
                 <div title={`Signed in as ${actorEmail}`} style={{
                   display: "inline-flex", alignItems: "center", gap: 6,
                   padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700,
@@ -2253,11 +2340,6 @@ function AppInner() {
                     ✕
                   </button>
                 </div>
-              ) : (
-                <button onClick={() => setSignInOpen(true)} title="Sign in for audit attribution" style={{
-                  background: "rgba(255,255,255,.12)", border: "none", color: H.white,
-                  padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer",
-                }}>Sign in</button>
               )}
               <button onClick={refresh} disabled={refreshing} title="Refresh data from Supabase" style={{
                 background: "rgba(255,255,255,.1)", border: "none", color: H.white,
@@ -2343,41 +2425,6 @@ function AppInner() {
             );
           })()}
           {confirmDialog}
-
-          {signInOpen && (
-            <div onClick={() => setSignInOpen(false)} style={{
-              position: "fixed", inset: 0, background: "rgba(0,44,95,.4)", zIndex: 9998,
-              display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
-            }}>
-              <div onClick={(e) => e.stopPropagation()} style={{
-                background: H.white, borderRadius: 12, maxWidth: 420, width: "100%",
-                boxShadow: "0 12px 40px rgba(0,44,95,.25)", overflow: "hidden",
-              }}>
-                <div style={{ background: H.navy, color: H.white, padding: "14px 18px", fontSize: 14, fontWeight: 700 }}>
-                  Sign in
-                </div>
-                <div style={{ padding: 18 }}>
-                  <p style={{ fontSize: 13, color: H.g600, margin: "0 0 14px", lineHeight: 1.5 }}>
-                    Enter your email to receive a magic-link sign-in.
-                    Once signed in, your name appears on every change you make
-                    (audit trail). No password needed.
-                  </p>
-                  <Input label="Email" value={signInEmail} onChange={setSignInEmail} placeholder="you@example.com" type="email" required />
-                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 10 }}>
-                    <button onClick={() => setSignInOpen(false)} style={{
-                      padding: "8px 16px", borderRadius: 8, border: `1px solid ${H.g200}`, background: H.white,
-                      color: H.g800, fontSize: 13, fontWeight: 600, cursor: "pointer",
-                    }}>Cancel</button>
-                    <button onClick={sendMagicLink} disabled={signInSubmitting} style={{
-                      padding: "8px 16px", borderRadius: 8, border: "none", background: H.navy, color: H.white,
-                      fontSize: 13, fontWeight: 700, cursor: signInSubmitting ? "wait" : "pointer",
-                      display: "inline-flex", alignItems: "center", gap: 8, opacity: signInSubmitting ? 0.7 : 1,
-                    }}>{signInSubmitting && <Spinner />}Send magic link</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       </LoadingCtx.Provider>
     </ConfirmCtx.Provider>
